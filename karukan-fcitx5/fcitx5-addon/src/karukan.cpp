@@ -64,7 +64,7 @@ void KarukanCandidateList::updateCandidates(::KarukanEngine* rustEngine) {
     }
 
     uint32_t count = karukan_engine_get_candidate_count(rustEngine);
-    uint32_t cursor = karukan_engine_get_candidate_cursor(rustEngine);
+    int cursor = karukan_engine_get_candidate_cursor(rustEngine);
 
     for (uint32_t i = 0; i < count; i++) {
         const char* text = karukan_engine_get_candidate(rustEngine, i);
@@ -77,7 +77,7 @@ void KarukanCandidateList::updateCandidates(::KarukanEngine* rustEngine) {
         }
     }
 
-    if (count > 0 && cursor < count) {
+    if (count > 0 && cursor >= 0 && static_cast<uint32_t>(cursor) < count) {
         setGlobalCursorIndex(static_cast<int>(cursor));
     }
 }

@@ -78,7 +78,7 @@ struct CandidateCache {
     /// has no description.
     descriptions: Vec<CString>,
     count: usize,
-    cursor: usize,
+    cursor: Option<usize>,
     dirty: bool,
     hide: bool,
 }

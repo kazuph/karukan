@@ -114,9 +114,13 @@ pub extern "C" fn karukan_engine_get_candidate_description(
 
 /// Get the current candidate cursor position
 #[unsafe(no_mangle)]
-pub extern "C" fn karukan_engine_get_candidate_cursor(engine: *const KarukanEngine) -> c_uint {
-    let engine = ffi_ref!(engine, 0);
-    engine.candidates.cursor as c_uint
+pub extern "C" fn karukan_engine_get_candidate_cursor(engine: *const KarukanEngine) -> c_int {
+    let engine = ffi_ref!(engine, -1);
+    engine
+        .candidates
+        .cursor
+        .map(|cursor| cursor as c_int)
+        .unwrap_or(-1)
 }
 
 /// Check if there's an aux text update pending

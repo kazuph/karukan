@@ -13,16 +13,7 @@ const XKB_KEY_RETURN: u32 = 0xff0d;
 const XKB_KEY_ESCAPE: u32 = 0xff1b;
 const XKB_KEY_BACKSPACE: u32 = 0xff08;
 const XKB_KEY_SHIFT_L: u32 = 0xffe1;
-const XKB_KEY_LOWER_L: u32 = 0x6c;
 const SHIFT_MASK: u32 = karukan_im::core::keycode::KeyModifiers::SHIFT_MASK;
-const CONTROL_MASK: u32 = karukan_im::core::keycode::KeyModifiers::CONTROL_MASK;
-
-/// Send Ctrl+Shift+L to disable live conversion. Tests that exercise the
-/// manual hiragana flow rely on the preedit staying as hiragana, so they
-/// turn live conversion off before typing.
-fn disable_live_conversion(e: &TestEngine) {
-    e.press_with(XKB_KEY_LOWER_L, CONTROL_MASK | SHIFT_MASK);
-}
 
 /// RAII wrapper around a raw `KarukanEngine` pointer.
 /// Automatically frees the engine on drop, preventing leaks in tests.
@@ -155,8 +146,10 @@ fn test_romaji_to_hiragana() {
 
 #[test]
 fn test_commit_composing() {
+    // Live conversion is off by default in this fork, so the preedit stays
+    // hiragana without any toggle. (The old Ctrl+Shift+L "disable" helper was
+    // a toggle and would now turn live conversion ON.)
     let e = TestEngine::new();
-    disable_live_conversion(&e);
 
     // Type "ai" -> "あい"
     e.press(XKB_KEY_A);
@@ -189,7 +182,6 @@ fn test_backspace() {
 #[test]
 fn test_escape_cancel() {
     let e = TestEngine::new();
-    disable_live_conversion(&e);
 
     // Type "ai"
     e.press(XKB_KEY_A);

@@ -160,8 +160,9 @@ const char* karukan_engine_get_candidate_description(const KarukanEngine* engine
 
 /*
  * Get the current candidate cursor position (selected index).
+ * Returns -1 when the visible candidate list has no selected row.
  */
-uint32_t karukan_engine_get_candidate_cursor(const KarukanEngine* engine);
+int karukan_engine_get_candidate_cursor(const KarukanEngine* engine);
 
 /* --- Auxiliary text (reading hint) --- */
 
