@@ -14,6 +14,41 @@
   <img src="images/demo.gif" width="800" alt="karukan demo" />
 </div>
 
+> これは kazuph による Karukan フォークで、Google IME 風UXに改変済みです。入力中は勝手に変換せず、Tabで予測、Spaceで通常変換を開始する操作感をデフォルトにしています。
+
+## kazuph フォークの Google IME 風UX
+
+このフォークは「ユーザーが操作するまで、ひらがなの Composing を維持する」ことを優先します。ライブ変換はデフォルトOFFで、必要な場合は `config.toml` の `conversion.live_conversion = true` または `Ctrl+Shift+L` でONに戻せます。
+
+| 操作 | このフォークの動作 | 本家 Karukan との差分 |
+|------|------------------|----------------------|
+| 文字入力中 | ひらがなのまま。候補窓は学習履歴・ユーザー辞書の予測だけを未選択で表示 | 入力ごとのモデル推論候補を混ぜず、1行目の偽ハイライトも出さない |
+| Tab / ↓ | 表示中の予測候補をそのまま選択。予測0件なら何もしない | 旧Tabの学習スキップ変換は `conversion.tab_skips_learning = true` で復活 |
+| Shift+Tab / ↑ | 表示中の予測候補を逆方向に選択 | 予測リストを再計算しない |
+| Ctrl+N / Ctrl+P | 予測選択中に次/前の候補へ移動 | Emacs風移動を予測候補にも対応 |
+| 数字1-9 | 表示中の予測候補を即確定 | Tabを押さずに候補番号で確定 |
+| Enter | 未選択ならひらがなをそのまま確定。選択中なら候補を確定 | ひらがな確定は学習キャッシュに記録しない |
+| Space | 読みと同じ長さの通常変換を開始 | 学習キャッシュの前方一致予測を混ぜない |
+| Esc | 予測選択中はひらがな Composing に戻る | 選択状態と表示が一致 |
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    Composing: Composing\nひらがな維持\n予測窓は未選択
+    Predict: 予測選択\nTab/↓/Ctrl+N/P/数字
+    Conversion: 通常変換\nSpace
+    Committed: 確定
+
+    Composing --> Predict: Tab / ↓\n予測がある
+    Composing --> Conversion: Space
+    Composing --> Committed: Enter\n学習記録なし
+    Predict --> Predict: Tab / ↓ / Shift+Tab / ↑\nCtrl+N / Ctrl+P
+    Predict --> Committed: Enter / 数字1-9\n学習記録あり
+    Predict --> Composing: Esc
+    Conversion --> Committed: Enter / 数字1-9\n学習記録あり
+    Conversion --> Composing: Esc
+```
+
 ## プロジェクト構成
 
 | クレート | 説明 |
