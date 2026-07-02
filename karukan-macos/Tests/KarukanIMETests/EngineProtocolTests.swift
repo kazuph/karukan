@@ -43,6 +43,23 @@ final class EngineProtocolTests: XCTestCase {
         XCTAssertEqual(result.conversionMs, 11)
     }
 
+    func testDecodeShowCandidatesWithoutSelection() throws {
+        let json = """
+            {"consumed":true,"actions":[{"candidates":[{"text":"よろしくお願いします"}],"cursor":null,"page":0,"total_pages":1,"type":"show_candidates"}],"conversion_ms":0,"process_key_ms":1}
+            """
+        let result = try decodeKeyResult(json)
+        guard
+            case .showCandidates(let candidates, let cursor, let page, let totalPages) =
+                result.actions[0]
+        else {
+            return XCTFail("expected show_candidates")
+        }
+        XCTAssertEqual(candidates.map(\.text), ["よろしくお願いします"])
+        XCTAssertNil(cursor)
+        XCTAssertEqual(page, 0)
+        XCTAssertEqual(totalPages, 1)
+    }
+
     func testDecodeCommitAndHide() throws {
         let json = """
             {"consumed":true,"actions":[{"text":"書きます","type":"commit"},{"type":"hide_candidates"},{"type":"hide_aux"}],"conversion_ms":0,"process_key_ms":0}
@@ -63,10 +80,10 @@ final class EngineProtocolTests: XCTestCase {
 
     func testDecodeInitResult() throws {
         let json = """
-            {"protocol_version":1,"model_name":"jinen-v1-small-q5"}
+            {"protocol_version":2,"model_name":"jinen-v1-small-q5"}
             """
         let result = try makeProtocolDecoder().decode(InitResult.self, from: Data(json.utf8))
-        XCTAssertEqual(result.protocolVersion, 1)
+        XCTAssertEqual(result.protocolVersion, 2)
         XCTAssertEqual(result.modelName, "jinen-v1-small-q5")
     }
 

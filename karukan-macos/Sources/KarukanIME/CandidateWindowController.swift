@@ -20,7 +20,7 @@ class CandidateWindowController {
 
     private struct PageState {
         let candidates: [CandidateItem]
-        let cursor: Int
+        let cursor: Int?
         let page: Int
         let totalPages: Int
     }
@@ -64,7 +64,7 @@ class CandidateWindowController {
     /// the panel is already on screen, since the composition anchor
     /// doesn't move mid-composition.
     func show(
-        candidates: [CandidateItem], cursor: Int, page: Int, totalPages: Int, cursorRect: NSRect?
+        candidates: [CandidateItem], cursor: Int?, page: Int, totalPages: Int, cursorRect: NSRect?
     ) {
         pageState = PageState(
             candidates: candidates, cursor: cursor, page: page, totalPages: totalPages)
@@ -95,7 +95,7 @@ class CandidateWindowController {
         }
 
         for (index, candidate) in state.candidates.enumerated() {
-            addCandidateRow(candidate, number: index + 1, selected: index == state.cursor)
+            addCandidateRow(candidate, number: index + 1, selected: state.cursor == index)
         }
         if state.totalPages > 1 {
             addFooterLabel("[\(state.page + 1)/\(state.totalPages)]")
