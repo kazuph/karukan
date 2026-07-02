@@ -70,6 +70,9 @@ pub struct ConversionSettings {
     pub n_threads: u32,
     /// Enable live conversion at startup (Ctrl+Shift+L still toggles at runtime)
     pub live_conversion: bool,
+    /// Restore the legacy Tab behavior: start conversion while skipping learning
+    /// candidates instead of selecting the visible prediction list.
+    pub tab_skips_learning: bool,
 }
 
 /// Learning cache settings

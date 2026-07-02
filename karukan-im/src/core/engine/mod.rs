@@ -153,6 +153,9 @@ pub struct InputMethodEngine {
     dicts: Dictionaries,
     /// Learning cache (user conversion history)
     learning: Option<LearningCache>,
+    /// Prediction candidates currently visible while composing. Stored so
+    /// Tab/Down can select exactly what the user was already seeing.
+    composing_candidates: Option<CandidateList>,
 }
 
 impl InputMethodEngine {
@@ -176,6 +179,7 @@ impl InputMethodEngine {
             chunks: Vec::new(),
             dicts: Dictionaries::default(),
             learning: None,
+            composing_candidates: None,
         }
     }
 
@@ -247,6 +251,7 @@ impl InputMethodEngine {
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
+        self.composing_candidates = None;
         self.metrics = ConversionMetrics::default();
     }
 

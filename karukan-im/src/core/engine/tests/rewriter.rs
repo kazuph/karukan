@@ -286,16 +286,19 @@ fn katakana_variants_carry_width_form_description() {
 // ---------- end-to-end key flow ----------
 
 #[test]
-fn typing_three_dots_emits_ellipsis_in_auto_suggest_and_conversion() {
+fn typing_three_dots_emits_ellipsis_in_conversion_not_prediction_window() {
     // Regression: typing `.` `.` `.` should populate `。。。` and surface `…`
-    // both in the auto-suggest list (before Space) and in the conversion
-    // candidate list (after Space).
+    // in the Space conversion candidate list. The Google IME style prediction
+    // window is now reserved for learning/user-dictionary predictions.
     let mut engine = InputMethodEngine::new();
     type_string(&mut engine, "..");
     let final_result = engine.process_key(&press('.'));
     assert_eq!(engine.input_buf.text, "。。。");
 
-    assert_contains(&auto_suggest_texts(&final_result), "…");
+    assert!(
+        auto_suggest_texts(&final_result).is_empty(),
+        "prediction window should not show rewriter-only candidates"
+    );
 
     engine.process_key(&press_key(Keysym::SPACE));
     assert_contains(&conversion_state_texts(&engine), "…");

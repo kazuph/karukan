@@ -337,6 +337,33 @@ fn escape_emoji_restores_pre_emoji_katakana_mode() {
 }
 
 #[test]
+fn digit_in_emoji_mode_stays_literal_even_with_predictions_visible() {
+    // Shortcodes like `:+1` and `:100` contain digits. Even when the
+    // prediction window is showing emoji candidates, a digit keypress in
+    // Emoji mode must extend the shortcode buffer, never commit the
+    // numbered candidate (the digit-selection shortcut is kana-mode only).
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press_colon());
+    for ch in ['s', 'm', 'i'] {
+        engine.process_key(&press(ch));
+    }
+    assert!(
+        engine.composing_candidates.is_some(),
+        "emoji predictions should be visible for `:smi` — precondition for this test"
+    );
+
+    let result = engine.process_key(&press('1'));
+    assert!(
+        !result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(_))),
+        "digit must not commit a prediction in emoji mode"
+    );
+    assert_eq!(engine.preedit().unwrap().text(), ":smi1");
+}
+
+#[test]
 fn colon_in_hiragana_does_not_enter_emoji_when_already_composing() {
     // A `:` typed in the middle of an existing hiragana composition is
     // just punctuation, not an emoji trigger — emoji mode only starts

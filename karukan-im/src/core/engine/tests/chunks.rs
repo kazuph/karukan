@@ -12,6 +12,7 @@ use crate::core::engine::EngineConfig;
 fn make_chunk_engine(chunk_len: usize) -> InputMethodEngine {
     let config = EngineConfig {
         composing_chunk_len: chunk_len,
+        live_conversion: true,
         ..EngineConfig::default()
     };
     InputMethodEngine::with_config(config)
@@ -114,7 +115,7 @@ fn test_chunks_break_at_punctuation() {
 fn test_short_buffer_is_a_single_chunk() {
     // With the default chunk length, short input is one chunk — identical
     // to a whole-buffer conversion (no behavior change for the common case).
-    let mut engine = InputMethodEngine::new();
+    let mut engine = make_chunk_engine(30);
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
     assert_eq!(engine.input_buf.text, "あい");

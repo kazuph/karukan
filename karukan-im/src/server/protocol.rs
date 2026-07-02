@@ -31,7 +31,7 @@ use serde_json::Value;
 use crate::core::keycode::KeyModifiers;
 
 /// Protocol version reported by `init`. Bump on breaking changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 // === JSON-RPC envelope ===
 
@@ -166,8 +166,8 @@ pub enum Action {
     /// paging internally (Page Up/Down keys move between pages).
     ShowCandidates {
         candidates: Vec<CandidateItem>,
-        /// Selected index within this page.
-        cursor: usize,
+        /// Selected index within this page. `null` means visible but not selected.
+        cursor: Option<usize>,
         /// Current page (0-based).
         page: usize,
         total_pages: usize,

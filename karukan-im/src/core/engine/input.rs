@@ -33,7 +33,8 @@ impl InputMethodEngine {
         // stays alive. `chunked_auto_suggest` splits long input into
         // bounded-length chunks so per-keystroke latency stays flat; for input
         // within one chunk this is identical to a whole-buffer call.
-        let convert = !self.input_buf.text.is_empty()
+        let convert = self.live.enabled
+            && !self.input_buf.text.is_empty()
             && (self.input_mode != InputMode::Alphabet
                 || karukan_engine::contains_kana(&self.input_buf.text));
         let candidates = if convert {
@@ -52,20 +53,19 @@ impl InputMethodEngine {
             self.live.text.clear();
             let preedit = self.set_composing_state();
             let reading = self.input_buf.text.clone();
-            let mut all_candidates = self.lookup_learning_candidates(&reading);
-            append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
-            append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
+            let all_candidates = self.build_prediction_candidates(&reading);
             if all_candidates.is_empty() {
+                self.composing_candidates = None;
                 return EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(preedit))
                     .with_action(EngineAction::HideCandidates)
                     .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
             }
+            let candidate_list = CandidateList::new_unselected(all_candidates);
+            self.composing_candidates = Some(candidate_list.clone());
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                    all_candidates,
-                )))
+                .with_action(EngineAction::ShowCandidates(candidate_list))
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         };
 
@@ -79,7 +79,7 @@ impl InputMethodEngine {
             // never empty, so the candidate window — whose aux line is where
             // frontends show the raw reading once the preedit displays converted
             // text — stays on screen for the whole live conversion.
-            let mut all_candidates = self.lookup_learning_candidates(&reading);
+            let mut all_candidates = self.lookup_learning_candidates(reading.as_str(), true, true);
             let model_candidates: Vec<Candidate> = candidates
                 .into_iter()
                 .map(|s| Candidate::with_reading(s, &reading))
@@ -98,22 +98,20 @@ impl InputMethodEngine {
         // Normal auto-suggest: show hiragana preedit + learning/model/dict candidates
         self.live.text.clear();
         let preedit = self.set_composing_state();
-        // Learning candidates first (highest priority)
-        let mut all_candidates = self.lookup_learning_candidates(&reading);
-        // Then model inference candidates
-        let model_candidates: Vec<Candidate> = candidates
-            .into_iter()
-            .map(|s| Candidate::with_reading(s, &reading))
-            .collect();
-        append_candidates_dedup(&mut all_candidates, model_candidates);
-        // Then dictionary candidates
-        append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
+        let all_candidates = self.build_prediction_candidates(&reading);
+        if all_candidates.is_empty() {
+            self.composing_candidates = None;
+            return EngineResult::consumed()
+                .with_action(EngineAction::UpdatePreedit(preedit))
+                .with_action(EngineAction::HideCandidates)
+                .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
+        }
+        let candidate_list = CandidateList::new_unselected(all_candidates);
+        self.composing_candidates = Some(candidate_list.clone());
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                all_candidates,
-            )))
+            .with_action(EngineAction::ShowCandidates(candidate_list))
             .with_action(EngineAction::UpdateAuxText(aux))
     }
 
@@ -278,16 +276,49 @@ impl InputMethodEngine {
             Keysym::BACKSPACE => self.backspace_composing(),
             Keysym::DELETE => self.delete_composing(),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
-            // Tab triggers conversion that bypasses the learning cache, so users
-            // can escape stale or unwanted learned entries (mozc binds Tab to a
-            // different conversion path — PredictAndConvert — in the same spirit).
-            Keysym::TAB => self.start_conversion(true),
-            Keysym::SPACE | Keysym::DOWN => self.start_conversion(false),
+            Keysym::TAB if self.config.tab_skips_learning => self.start_conversion(true),
+            Keysym::TAB | Keysym::DOWN => {
+                if shift_active || key.modifiers.shift_key {
+                    self.select_visible_prediction_prev()
+                } else {
+                    self.select_visible_prediction_next()
+                }
+            }
+            Keysym::UP => self.select_visible_prediction_prev(),
+            Keysym::SPACE => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
             Keysym::RIGHT => self.move_caret_right(),
             Keysym::HOME => self.move_caret_home(),
             Keysym::END => self.move_caret_end(),
             _ => {
+                if self.composing_candidates.is_some()
+                    && key.modifiers.control_key
+                    && !key.modifiers.alt_key
+                {
+                    match key.keysym {
+                        Keysym::KEY_N | Keysym::KEY_N_UPPER => {
+                            return self.select_visible_prediction_next();
+                        }
+                        Keysym::KEY_P | Keysym::KEY_P_UPPER => {
+                            return self.select_visible_prediction_prev();
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Digit selection is limited to kana modes: in Alphabet mode
+                // digits are literal text (`id1234`), and in Emoji mode they
+                // are part of shortcodes (`:+1`, `:100`), so hijacking them
+                // to commit a prediction would corrupt normal input.
+                if self.composing_candidates.is_some()
+                    && !matches!(self.input_mode, InputMode::Alphabet | InputMode::Emoji)
+                    && let Some(digit) = key.keysym.digit_value()
+                    && !key.modifiers.control_key
+                    && !key.modifiers.alt_key
+                {
+                    return self.commit_visible_prediction_by_digit(digit);
+                }
+
                 if let Some(ch) = key.to_char()
                     && !key.modifiers.control_key
                     && !key.modifiers.alt_key
@@ -419,6 +450,7 @@ impl InputMethodEngine {
             self.input_buf.clear();
             self.live.text.clear();
             self.chunks.clear();
+            self.composing_candidates = None;
             return EngineResult::consumed()
                 .with_action(EngineAction::HideCandidates)
                 .with_action(EngineAction::HideAuxText);
@@ -428,7 +460,7 @@ impl InputMethodEngine {
         // Skip the learning record for emoji mode — the buffer holds
         // a Slack-style query like `:smile`, not a hiragana reading,
         // so storing it would corrupt the kana-keyed learning cache.
-        if self.input_mode != InputMode::Emoji {
+        if self.input_mode != InputMode::Emoji && text != reading {
             self.record_learning(&reading, &text);
         }
 
@@ -436,6 +468,7 @@ impl InputMethodEngine {
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
+        self.composing_candidates = None;
         self.state = InputState::Empty;
         self.exit_emoji_mode();
 

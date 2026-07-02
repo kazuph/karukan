@@ -265,6 +265,7 @@ impl InputMethodEngine {
             preedit: preedit.clone(),
             candidates: candidates.clone(),
         };
+        self.composing_candidates = None;
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
@@ -361,7 +362,7 @@ impl InputMethodEngine {
         //    Force-inserted so they win against duplicate text from later sources.
         //    Skipped when the caller asks for a learning-free conversion (Tab key).
         if !skip_learning {
-            for c in self.lookup_learning_candidates(reading) {
+            for c in self.lookup_learning_candidates(reading, false, false) {
                 // Exact matches have reading == input reading; use None to avoid redundancy
                 let cand_reading = c.reading.filter(|r| r != reading);
                 builder.push_force(
@@ -480,7 +481,12 @@ impl InputMethodEngine {
     /// Look up learning cache candidates for a reading (exact + prefix match, max 3).
     ///
     /// Returns candidates from the learning cache suitable for auto-suggest display.
-    pub(super) fn lookup_learning_candidates(&self, reading: &str) -> Vec<Candidate> {
+    pub(super) fn lookup_learning_candidates(
+        &self,
+        reading: &str,
+        include_prefix: bool,
+        exclude_identity: bool,
+    ) -> Vec<Candidate> {
         let Some(cache) = &self.learning else {
             return vec![];
         };
@@ -493,6 +499,9 @@ impl InputMethodEngine {
             if candidates.len() >= MAX_LEARNING_CANDIDATES {
                 break;
             }
+            if exclude_identity && surface == reading {
+                continue;
+            }
             if seen.insert(surface.clone()) {
                 candidates.push(Candidate {
                     text: surface,
@@ -503,12 +512,19 @@ impl InputMethodEngine {
             }
         }
 
+        if !include_prefix {
+            return candidates;
+        }
+
         // Prefix match (predictive)
         for (full_reading, surface, _score) in cache.prefix_lookup(reading) {
             if candidates.len() >= MAX_LEARNING_CANDIDATES {
                 break;
             }
             if full_reading == reading {
+                continue;
+            }
+            if exclude_identity && surface == reading {
                 continue;
             }
             if seen.insert(surface.clone()) {
@@ -522,6 +538,47 @@ impl InputMethodEngine {
         }
 
         candidates
+    }
+
+    /// Prediction-only candidates shown while composing. This deliberately
+    /// excludes per-key model inference and system dictionary results: the
+    /// window is for user history/user dictionary predictions, not conversion.
+    pub(super) fn build_prediction_candidates(&self, reading: &str) -> Vec<Candidate> {
+        if self.input_mode == InputMode::Emoji {
+            return self.lookup_rewriter_variants(reading);
+        }
+        let mut all_candidates = self.lookup_learning_candidates(reading, true, true);
+        for c in self.lookup_user_dict_candidates(reading) {
+            if !all_candidates
+                .iter()
+                .any(|existing| existing.text == c.text)
+            {
+                all_candidates.push(c);
+            }
+        }
+        all_candidates
+    }
+
+    /// Look up exact user dictionary candidates for the prediction window.
+    fn lookup_user_dict_candidates(&self, reading: &str) -> Vec<Candidate> {
+        let Some(dict) = &self.dicts.user else {
+            return vec![];
+        };
+        let Some(result) = dict.exact_match_search(reading) else {
+            return vec![];
+        };
+        let label = CandidateSource::UserDictionary.label().to_string();
+        result
+            .candidates
+            .iter()
+            .take(CandidateList::DEFAULT_PAGE_SIZE)
+            .map(|cand| Candidate {
+                text: cand.surface.clone(),
+                reading: Some(reading.to_string()),
+                source_label: Some(label.clone()),
+                description: None,
+            })
+            .collect()
     }
 
     /// Look up dictionary candidates for a reading (1 page, for live conversion display)
@@ -833,5 +890,63 @@ impl InputMethodEngine {
     fn backspace_conversion(&mut self) -> EngineResult {
         // Return to hiragana mode with the reading
         self.cancel_conversion()
+    }
+
+    fn select_visible_prediction(&mut self, forward: bool) -> EngineResult {
+        self.flush_romaji_to_composed();
+        let reading = self.input_buf.text.clone();
+        let Some(mut candidates) = self.composing_candidates.clone() else {
+            return EngineResult::consumed();
+        };
+        if candidates.is_empty() {
+            return EngineResult::consumed();
+        }
+        if forward {
+            candidates.move_next();
+        } else {
+            candidates.move_prev();
+        }
+        self.live.text.clear();
+        self.chunks.clear();
+        self.enter_conversion_state(&reading, candidates)
+    }
+
+    pub(super) fn select_visible_prediction_next(&mut self) -> EngineResult {
+        self.select_visible_prediction(true)
+    }
+
+    pub(super) fn select_visible_prediction_prev(&mut self) -> EngineResult {
+        self.select_visible_prediction(false)
+    }
+
+    pub(super) fn commit_visible_prediction_by_digit(&mut self, digit: usize) -> EngineResult {
+        self.flush_romaji_to_composed();
+        let reading = self.input_buf.text.clone();
+        let Some(mut candidates) = self.composing_candidates.clone() else {
+            return EngineResult::not_consumed();
+        };
+        if candidates.is_empty() || candidates.select_on_page(digit).is_none() {
+            return EngineResult::not_consumed();
+        }
+        let Some(selected) = candidates.selected().cloned() else {
+            return EngineResult::not_consumed();
+        };
+        if let Some(candidate_reading) = selected.reading.as_deref() {
+            self.record_learning(candidate_reading, &selected.text);
+        } else {
+            self.record_learning(&reading, &selected.text);
+        }
+        self.state = InputState::Empty;
+        self.converters.romaji.reset();
+        self.input_buf.clear();
+        self.live.text.clear();
+        self.chunks.clear();
+        self.composing_candidates = None;
+
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::HideAuxText)
+            .with_action(EngineAction::Commit(selected.text))
     }
 }

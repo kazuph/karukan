@@ -70,8 +70,9 @@ impl From<&str> for Candidate {
 pub struct CandidateList {
     /// All candidates
     candidates: Vec<Candidate>,
-    /// Currently selected candidate index
-    cursor: usize,
+    /// Currently selected candidate index. `None` means the list is visible
+    /// as a prediction window, but no row is highlighted yet.
+    cursor: Option<usize>,
     /// Number of candidates per page
     page_size: usize,
 }
@@ -84,7 +85,16 @@ impl CandidateList {
     pub fn new(candidates: Vec<Candidate>) -> Self {
         Self {
             candidates,
-            cursor: 0,
+            cursor: Some(0),
+            page_size: Self::DEFAULT_PAGE_SIZE,
+        }
+    }
+
+    /// Create a candidate list with no selected row.
+    pub fn new_unselected(candidates: Vec<Candidate>) -> Self {
+        Self {
+            candidates,
+            cursor: None,
             page_size: Self::DEFAULT_PAGE_SIZE,
         }
     }
@@ -125,7 +135,7 @@ impl CandidateList {
     }
 
     /// Get the current cursor position
-    pub fn cursor(&self) -> usize {
+    pub fn cursor(&self) -> Option<usize> {
         self.cursor
     }
 
@@ -136,7 +146,9 @@ impl CandidateList {
 
     /// Get the current page number (0-indexed)
     pub fn current_page(&self) -> usize {
-        self.cursor.checked_div(self.page_size).unwrap_or(0)
+        self.cursor
+            .and_then(|cursor| cursor.checked_div(self.page_size))
+            .unwrap_or(0)
     }
 
     /// Get the total number of pages
@@ -161,13 +173,13 @@ impl CandidateList {
     }
 
     /// Get the cursor position within the current page (0-indexed)
-    pub fn page_cursor(&self) -> usize {
-        self.cursor - self.page_start()
+    pub fn page_cursor(&self) -> Option<usize> {
+        self.cursor.map(|cursor| cursor - self.page_start())
     }
 
     /// Get the currently selected candidate
     pub fn selected(&self) -> Option<&Candidate> {
-        self.candidates.get(self.cursor)
+        self.cursor.and_then(|cursor| self.candidates.get(cursor))
     }
 
     /// Get the currently selected text
@@ -177,12 +189,19 @@ impl CandidateList {
 
     /// Move to the next candidate
     pub fn move_next(&mut self) -> bool {
-        if self.cursor + 1 < self.candidates.len() {
-            self.cursor += 1;
+        let Some(cursor) = self.cursor else {
+            if self.candidates.is_empty() {
+                return false;
+            }
+            self.cursor = Some(0);
+            return true;
+        };
+        if cursor + 1 < self.candidates.len() {
+            self.cursor = Some(cursor + 1);
             true
         } else if !self.candidates.is_empty() {
             // Wrap to beginning
-            self.cursor = 0;
+            self.cursor = Some(0);
             true
         } else {
             false
@@ -191,12 +210,19 @@ impl CandidateList {
 
     /// Move to the previous candidate
     pub fn move_prev(&mut self) -> bool {
-        if self.cursor > 0 {
-            self.cursor -= 1;
+        let Some(cursor) = self.cursor else {
+            if self.candidates.is_empty() {
+                return false;
+            }
+            self.cursor = Some(self.candidates.len() - 1);
+            return true;
+        };
+        if cursor > 0 {
+            self.cursor = Some(cursor - 1);
             true
         } else if !self.candidates.is_empty() {
             // Wrap to end
-            self.cursor = self.candidates.len() - 1;
+            self.cursor = Some(self.candidates.len() - 1);
             true
         } else {
             false
@@ -211,11 +237,11 @@ impl CandidateList {
 
         let next_page_start = self.page_start() + self.page_size;
         if next_page_start < self.candidates.len() {
-            self.cursor = next_page_start;
+            self.cursor = Some(next_page_start);
             true
         } else {
             // Wrap to first page
-            self.cursor = 0;
+            self.cursor = Some(0);
             true
         }
     }
@@ -228,12 +254,12 @@ impl CandidateList {
 
         let current_page = self.current_page();
         if current_page > 0 {
-            self.cursor = (current_page - 1) * self.page_size;
+            self.cursor = Some((current_page - 1) * self.page_size);
             true
         } else {
             // Wrap to last page
             let last_page = self.total_pages().saturating_sub(1);
-            self.cursor = last_page * self.page_size;
+            self.cursor = Some(last_page * self.page_size);
             true
         }
     }
@@ -246,7 +272,7 @@ impl CandidateList {
 
         let absolute_index = self.page_start() + page_index - 1;
         if absolute_index < self.candidates.len() {
-            self.cursor = absolute_index;
+            self.cursor = Some(absolute_index);
             self.selected()
         } else {
             None
@@ -256,7 +282,7 @@ impl CandidateList {
     /// Select a candidate by absolute index
     pub fn select(&mut self, index: usize) -> Option<&Candidate> {
         if index < self.candidates.len() {
-            self.cursor = index;
+            self.cursor = Some(index);
             self.selected()
         } else {
             None
@@ -265,13 +291,18 @@ impl CandidateList {
 
     /// Reset cursor to beginning
     pub fn reset(&mut self) {
-        self.cursor = 0;
+        self.cursor = Some(0);
+    }
+
+    /// Clear selection while keeping the candidates visible.
+    pub fn clear_selection(&mut self) {
+        self.cursor = None;
     }
 
     /// Update the candidate list with new candidates
     pub fn update(&mut self, candidates: Vec<Candidate>) {
         self.candidates = candidates;
-        self.cursor = 0;
+        self.cursor = Some(0);
     }
 }
 
@@ -289,6 +320,18 @@ mod tests {
     fn test_candidate_list_basic() {
         let candidates = CandidateList::from_strings(["今日", "京", "恭"]);
         assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates.selected_text(), Some("今日"));
+    }
+
+    #[test]
+    fn test_candidate_list_unselected() {
+        let mut candidates = CandidateList::new_unselected(vec![Candidate::new("今日")]);
+        assert_eq!(candidates.cursor(), None);
+        assert_eq!(candidates.page_cursor(), None);
+        assert_eq!(candidates.selected_text(), None);
+
+        assert!(candidates.move_next());
+        assert_eq!(candidates.cursor(), Some(0));
         assert_eq!(candidates.selected_text(), Some("今日"));
     }
 
