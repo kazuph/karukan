@@ -46,6 +46,20 @@ def _is_kana(text: str) -> bool:
     return True
 
 
+def _normalize_entry(
+    reading: str, wrong: str, correct: str
+) -> tuple[str, str] | None:
+    reading = (reading or "").strip()
+    if not reading:
+        reading = (wrong or "").strip()
+    correct = (correct or "").strip()
+    if not reading or not correct:
+        return None
+    if not _is_kana(reading):
+        return None
+    return reading, correct
+
+
 def _collect_api_entries() -> tuple[list[tuple[str, str]], int] | None:
     request = Request(API_URL, headers={"Accept": "application/json"})
     try:
@@ -75,11 +89,13 @@ def _collect_api_entries() -> tuple[list[tuple[str, str]], int] | None:
             skipped += 1
             continue
         reading = row.get("reading", "") or ""
+        wrong = row.get("wrong", "") or ""
         correct = row.get("correct", "") or ""
-        if not reading or not correct or not _is_kana(reading):
+        normalized = _normalize_entry(str(reading), str(wrong), str(correct))
+        if not normalized:
             skipped += 1
             continue
-        entries.append((str(reading), str(correct)))
+        entries.append(normalized)
     return entries, skipped
 
 
@@ -98,12 +114,11 @@ def _collect_feedback_tsv_entries(path: Path) -> tuple[list[tuple[str, str]], in
             reading = (cols[0] if cols else "").strip()
             wrong = (cols[1] if len(cols) >= 2 else "").strip()
             correct = (cols[2] if len(cols) >= 3 else "").strip()
-            if not reading:
-                reading = wrong
-            if not reading or not correct or not _is_kana(reading):
+            normalized = _normalize_entry(reading, wrong, correct)
+            if not normalized:
                 skipped += 1
                 continue
-            entries.append((reading, correct))
+            entries.append(normalized)
     except OSError as e:
         print(f"failed to read {path}: {e}", file=sys.stderr)
         return None

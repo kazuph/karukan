@@ -14,8 +14,12 @@
     <key>ProgramArguments</key>
     <array>
         <string>python3</string>
-        <string>/Users/kazuph/src/github.com/kazuph/karukan/.worktree/feature/google-ime-ux/scripts/gtype_feedback_sync.py</string>
+        <string>/Users/kazuph/src/github.com/kazuph/karukan/scripts/gtype_feedback_sync.py</string>
         <string>/Users/kazuph/Library/Application Support/com.karukan.karukan-im/user_dicts/gtype_feedback.tsv</string>
     </array>
+    <key>StandardOutPath</key>
+    <string>/Users/kazuph/Library/Logs/karukan-gtype-sync.log</string>
+    <key>StandardErrPath</key>
+    <string>/Users/kazuph/Library/Logs/karukan-gtype-sync.log</string>
 </dict>
 </plist>

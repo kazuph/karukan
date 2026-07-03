@@ -98,7 +98,9 @@ launchctl load -w "$HOME/Library/LaunchAgents/com.kazuph.karukan.gtype-sync.plis
 
 更新確認は `python3 scripts/gtype_feedback_sync.py ...` を直接実行して
 `user_dicts` の `gtype_feedback.tsv` を確認、または
-`tail -f "$HOME/Library/LaunchAgents/com.kazuph.karukan.gtype-sync.log"`（未設定時は標準出力）で監視します。
+`tail -f "$HOME/Library/Logs/karukan-gtype-sync.log"`（未設定時は標準出力）で監視します。
+
+注記: 本リポジトリを別パスへ再checkoutした場合、launchd用plistの `ProgramArguments` はそのpathへ合わせて差し替える必要があります（`main` へのmerge後に有効）。
 
 ### 注意
 
