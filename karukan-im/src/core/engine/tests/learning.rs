@@ -229,6 +229,54 @@ fn prediction_digit_commits_visible_candidate_immediately() {
 }
 
 #[test]
+fn prediction_shows_user_dict_predictive_entry_for_prefix_reading() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut engine = InputMethodEngine::new();
+
+    create_user_dict_file(
+        temp_dir.path(),
+        "predictive.tsv",
+        "あんそろぴっく",
+        "Anthropic",
+    );
+    engine.init_user_dictionaries_with_dir(temp_dir.path());
+
+    let candidates = engine.build_prediction_candidates("あんそ");
+    let candidate_reading = candidates
+        .iter()
+        .find(|c| c.text == "Anthropic")
+        .and_then(|c| c.reading.clone())
+        .expect("Anthropic prediction should be present");
+
+    assert_eq!(candidate_reading, "あんそろぴっく");
+    assert_eq!(
+        candidate_reading,
+        "あんそろぴっく".to_string(),
+        "prediction must keep full reading for later learning"
+    );
+}
+
+#[test]
+fn prediction_does_not_use_user_dict_predictive_for_single_char_input() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut engine = InputMethodEngine::new();
+
+    create_user_dict_file(
+        temp_dir.path(),
+        "predictive.tsv",
+        "あんそろぴっく",
+        "Anthropic",
+    );
+    engine.init_user_dictionaries_with_dir(temp_dir.path());
+
+    let candidates = engine.build_prediction_candidates("あ");
+    assert!(
+        candidates.iter().all(|c| c.text != "Anthropic"),
+        "single char should not trigger user_dict predictive"
+    );
+}
+
+#[test]
 fn user_dictionary_candidates_reload_after_file_change() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut engine = InputMethodEngine::new();

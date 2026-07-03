@@ -10,6 +10,7 @@ use super::*;
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
+const MAX_USER_DICT_PREDICTIVE_CANDIDATES: usize = 5;
 
 /// Mozc-style width/script annotation for a pure-kana candidate, or `None`
 /// if the text mixes scripts or contains kanji/punctuation. Used to label
@@ -552,7 +553,8 @@ impl InputMethodEngine {
             return self.lookup_rewriter_variants(reading);
         }
         let mut all_candidates = self.lookup_learning_candidates(reading, true, true);
-        for c in self.lookup_user_dict_candidates(reading) {
+
+        for c in self.lookup_user_dict_exact_candidates(reading) {
             if !all_candidates
                 .iter()
                 .any(|existing| existing.text == c.text)
@@ -560,11 +562,28 @@ impl InputMethodEngine {
                 all_candidates.push(c);
             }
         }
+
+        // System dictionary predictive lookup is intentionally disabled to avoid
+        // noise during input; only user dictionary prediction is used in W2.
+        if reading.chars().count() >= 2 {
+            for c in self.lookup_user_dict_predictive_candidates(
+                reading,
+                MAX_USER_DICT_PREDICTIVE_CANDIDATES,
+            ) {
+                if !all_candidates
+                    .iter()
+                    .any(|existing| existing.text == c.text)
+                {
+                    all_candidates.push(c);
+                }
+            }
+        }
+
         all_candidates
     }
 
     /// Look up exact user dictionary candidates for the prediction window.
-    fn lookup_user_dict_candidates(&self, reading: &str) -> Vec<Candidate> {
+    fn lookup_user_dict_exact_candidates(&self, reading: &str) -> Vec<Candidate> {
         let Some(dict) = &self.dicts.user else {
             return vec![];
         };
@@ -583,6 +602,47 @@ impl InputMethodEngine {
                 description: None,
             })
             .collect()
+    }
+
+    /// Look up predictive user dictionary candidates for the prediction window.
+    ///
+    /// Returns candidates from readings that begin with `reading`, with full
+    /// reading preserved for each result.
+    fn lookup_user_dict_predictive_candidates(
+        &self,
+        reading: &str,
+        limit: usize,
+    ) -> Vec<Candidate> {
+        let Some(dict) = &self.dicts.user else {
+            return vec![];
+        };
+        if limit == 0 {
+            return vec![];
+        }
+
+        let mut candidates = Vec::new();
+        let reading_len = reading.chars().count();
+        let label = CandidateSource::UserDictionary.label().to_string();
+
+        for result in dict.predictive_search(reading, limit) {
+            if result.reading == reading {
+                continue;
+            }
+            if result.reading.chars().count() <= reading_len {
+                continue;
+            }
+
+            for cand in result.candidates {
+                candidates.push(Candidate {
+                    text: cand.surface.clone(),
+                    reading: Some(result.reading.to_string()),
+                    source_label: Some(label.clone()),
+                    description: None,
+                });
+            }
+        }
+
+        candidates
     }
 
     /// Look up dictionary candidates for a reading (1 page, for live conversion display)

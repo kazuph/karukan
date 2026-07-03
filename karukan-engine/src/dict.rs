@@ -289,6 +289,34 @@ impl Dictionary {
         })
     }
 
+    /// Predictive search: returns entries whose reading starts with `input`,
+    /// in dictionary order, capped by `limit`.
+    pub fn predictive_search(&self, input: &str, limit: usize) -> Vec<LookupResult<'_>> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let input_bytes = input.as_bytes();
+        let start = self
+            .entries
+            .partition_point(|entry| entry.reading.as_bytes() < input_bytes);
+
+        let mut results = Vec::new();
+        for entry in &self.entries[start..] {
+            if !entry.reading.starts_with(input) {
+                break;
+            }
+            results.push(LookupResult {
+                reading: &entry.reading,
+                candidates: &entry.candidates,
+            });
+            if results.len() >= limit {
+                break;
+            }
+        }
+        results
+    }
+
     /// Write all entries in the dictionary to `writer` (for inspection/debugging).
     ///
     /// Each line is tab-separated: `reading\tsurface\tscore`.
@@ -664,6 +692,19 @@ mod tests {
         let readings: Vec<&str> = results.iter().map(|r| r.reading).collect();
         assert!(readings.contains(&"きょう"));
         assert!(readings.contains(&"きょうと"));
+    }
+
+    #[test]
+    fn test_predictive_search() {
+        let json_file = create_test_json();
+        let dict = Dictionary::build_from_json(json_file.path()).unwrap();
+
+        let results = dict.predictive_search("きょう", 10);
+        assert_eq!(results.len(), 2);
+        let readings: Vec<&str> = results.iter().map(|r| r.reading).collect();
+        assert_eq!(readings, vec!["きょう", "きょうと"]);
+        assert_eq!(results[0].candidates[0].surface, "京");
+        assert_eq!(results[1].candidates[0].surface, "京都");
     }
 
     #[test]
