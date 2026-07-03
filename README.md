@@ -49,6 +49,39 @@ stateDiagram-v2
     Conversion --> Composing: Esc
 ```
 
+## ユーザー辞書で語彙力ブースト（Google IMEからの移行）
+
+Google IME（Google 日本語入力）で育てたユーザー辞書は、そのまま karukan に持ち込めます。
+
+**置き場所**（ファイルを置いて `killall KarukanIME` するだけ。複数ファイル可・ファイル名順にマージ）:
+
+| OS | user_dicts ディレクトリ |
+|----|--------------------------|
+| macOS | `~/Library/Application Support/com.karukan.karukan-im/user_dicts/` |
+| Linux | `~/.local/share/karukan-im/user_dicts/` |
+
+**形式**: Mozc/Google IME の辞書TSV（`読み<TAB>表記<TAB>品詞<TAB>コメント`）。karukan は先頭2列（読み・表記）だけを使うので、品詞以降は空でも構いません。
+
+### 手順A: 辞書ツールからエクスポート（推奨）
+
+1. Google IME のメニュー →「辞書ツール」→「管理」→「選択した辞書をエクスポート」でTSVを書き出す
+2. 書き出したTSVを上記 `user_dicts/` に置く
+3. `killall KarukanIME`（次の入力から新しい辞書が有効）
+
+### 手順B: user_dictionary.db から直接変換（GUI不要）
+
+```bash
+python3 scripts/mozc_user_dictionary_db_to_tsv.py \
+  "$HOME/Library/Application Support/Google/JapaneseInput/user_dictionary.db" \
+  "$HOME/Library/Application Support/com.karukan.karukan-im/user_dicts/google_ime_import.tsv"
+killall KarukanIME
+```
+
+### 注意
+
+- 読みが `:` で始まるエントリ（絵文字パック等）は、karukan では `:` が Emoji モードのトリガーのため読みとして到達不能です。手順Bのスクリプトは自動で除外します（karukan は絵文字入力を標準搭載しているため不要）
+- 効き方: **Space の通常変換**と、**読みを最後まで打ったときのサジェスト**（完全一致）に効きます。読みの途中での前方一致予測は今後の改善候補です
+
 ## プロジェクト構成
 
 | クレート | 説明 |
