@@ -371,6 +371,21 @@ fn prediction_window_excludes_identity_learning_entry() {
 }
 
 #[test]
+fn select_candidate_on_page_in_composing_commits_prediction() {
+    let mut engine = engine_with_learning(&[("よろしくおねがいします", "よろしくお願いします")]);
+    let result = type_string(&mut engine, "yoroshiku");
+    assert_eq!(result.consumed, true);
+    assert_eq!(shown_candidate_texts(&result), vec!["よろしくお願いします"]);
+
+    let result = engine.select_candidate_on_page(0);
+    assert_eq!(
+        committed_text(&result).as_deref(),
+        Some("よろしくお願いします")
+    );
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
 fn unchanged_enter_does_not_record_learning() {
     let mut engine = engine_with_learning(&[]);
     type_string(&mut engine, "ato");

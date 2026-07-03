@@ -5,7 +5,7 @@ import Cocoa
 /// The engine pre-paginates: `show` receives only the visible page plus
 /// page metadata, so this controller just renders rows. An optional aux
 /// line (reading hint / model info from the engine) is shown as a footer.
-class CandidateWindowController {
+final class CandidateWindowController: NSObject {
     // Visual scale of the panel. Candidate rows use a larger type size
     // than the footers (page indicator / aux line), matching the system
     // Japanese IME's proportions.
@@ -16,6 +16,7 @@ class CandidateWindowController {
     private let panel: NSPanel
     private let stackView: NSStackView
     private var rowViews: [NSView] = []
+    private var candidateSelectHandler: ((Int) -> Void)?
     private var auxText: String?
 
     private struct PageState {
@@ -26,7 +27,7 @@ class CandidateWindowController {
     }
     private var pageState: PageState?
 
-    init() {
+    override init() {
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -37,7 +38,8 @@ class CandidateWindowController {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = NSColor.windowBackgroundColor
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
 
         stackView = NSStackView()
         stackView.orientation = .vertical
@@ -84,7 +86,12 @@ class CandidateWindowController {
 
     func hide() {
         pageState = nil
+        candidateSelectHandler = nil
         panel.orderOut(nil)
+    }
+
+    func setCandidateSelectHandler(_ handler: ((Int) -> Void)?) {
+        candidateSelectHandler = handler
     }
 
     private func render(cursorRect: NSRect?) {
@@ -136,17 +143,31 @@ class CandidateWindowController {
                 ))
         }
 
-        let label = NSTextField(labelWithAttributedString: text)
-        label.translatesAutoresizingMaskIntoConstraints = false
+        let button = NSButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.attributedTitle = text
+        button.isBordered = false
+        button.bezelStyle = .texturedRounded
+        button.focusRingType = .none
+        button.setButtonType(.momentaryChange)
+        button.target = self
+        button.action = #selector(candidateTapped(_:))
+        button.tag = number - 1
+        button.alignment = .left
+        button.showsBorderOnlyWhileMouseInside = true
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 4
         if selected {
-            label.backgroundColor = NSColor.selectedContentBackgroundColor
-            label.drawsBackground = true
+            button.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
         } else {
-            label.backgroundColor = .clear
-            label.drawsBackground = false
+            button.layer?.backgroundColor = NSColor.clear.cgColor
         }
-        stackView.addArrangedSubview(label)
-        rowViews.append(label)
+        stackView.addArrangedSubview(button)
+        rowViews.append(button)
+    }
+
+    @objc private func candidateTapped(_ sender: NSButton) {
+        candidateSelectHandler?(sender.tag)
     }
 
     private func addFooterLabel(_ text: String) {

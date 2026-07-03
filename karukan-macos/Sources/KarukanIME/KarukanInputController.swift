@@ -141,6 +141,10 @@ class KarukanInputController: IMKInputController {
                 // focused app) only when the panel comes on screen; it
                 // doesn't move while the panel stays visible.
                 var cursorRect: NSRect?
+                Self.candidateWindow.setCandidateSelectHandler { [weak self] pageIndex in
+                    guard let self else { return }
+                    self.selectCandidateFromWindow(pageIndex: pageIndex, client: client)
+                }
                 if !Self.candidateWindow.isVisible {
                     var lineHeightRect = NSRect.zero
                     client.attributes(forCharacterIndex: 0, lineHeightRectangle: &lineHeightRect)
@@ -244,6 +248,13 @@ class KarukanInputController: IMKInputController {
             selectionRange: NSRange(location: caretUTF16, length: 0),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
+    }
+
+    private func selectCandidateFromWindow(pageIndex: Int, client: any IMKTextInput) {
+        guard let result = engineClient.selectCandidateSync(pageIndex: pageIndex) else {
+            return
+        }
+        apply(actions: result.actions, client: client)
     }
 }
 

@@ -882,9 +882,17 @@ impl InputMethodEngine {
     pub fn select_candidate_on_page(&mut self, page_index: usize) -> EngineResult {
         let start = std::time::Instant::now();
         self.metrics.conversion_ms = 0;
-        let result = self.select_candidate_by_digit(page_index + 1);
+        let result = match &self.state {
+            InputState::Conversion { .. } => self.select_candidate_by_digit(page_index + 1),
+            InputState::Composing { .. } => self.select_candidate_from_composing(page_index),
+            _ => EngineResult::not_consumed(),
+        };
         self.metrics.process_key_ms = start.elapsed().as_millis() as u64;
         result
+    }
+
+    fn select_candidate_from_composing(&mut self, page_index: usize) -> EngineResult {
+        self.commit_visible_prediction_by_digit(page_index + 1)
     }
 
     /// Select candidate by digit (1-9)
