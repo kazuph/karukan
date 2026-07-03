@@ -5,6 +5,9 @@
 
 use karukan_engine::LearningCache;
 
+use std::fs;
+use std::time::SystemTime;
+
 use super::*;
 
 /// Engine seeded with a learning entry `reading → surface`, no kanji model.
@@ -74,6 +77,19 @@ fn committed_text(result: &EngineResult) -> Option<String> {
         EngineAction::Commit(text) => Some(text.clone()),
         _ => None,
     })
+}
+
+fn create_user_dict_file(dir: &std::path::Path, filename: &str, reading: &str, surface: &str) {
+    let path = dir.join(filename);
+    fs::write(
+        path,
+        format!("{reading}\t{surface}\t名詞\tgtype feedback\n"),
+    )
+    .unwrap();
+}
+
+fn candidate_texts(candidates: &[Candidate]) -> Vec<String> {
+    candidates.iter().map(|c| c.text.clone()).collect()
 }
 
 #[test]
@@ -210,6 +226,36 @@ fn prediction_digit_commits_visible_candidate_immediately() {
         Some("よろしくお願いします")
     );
     assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
+fn user_dictionary_candidates_reload_after_file_change() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut engine = InputMethodEngine::new();
+
+    create_user_dict_file(temp_dir.path(), "a_initial.tsv", "あんそ", "暗所");
+    engine.init_user_dictionaries_with_dir(temp_dir.path());
+    assert!(engine.dicts.user.is_some(), "user dict should be loaded");
+    assert!(
+        engine
+            .dicts
+            .user
+            .as_ref()
+            .and_then(|dict| dict.exact_match_search("あんそ"))
+            .is_some(),
+        "exact match should exist for あんそ"
+    );
+    engine.dicts.user_dict_last_checked = Some(SystemTime::now());
+
+    let before = candidate_texts(&engine.build_prediction_candidates("あんそ"));
+    assert_eq!(before, vec!["暗所"]);
+
+    create_user_dict_file(temp_dir.path(), "z_added.tsv", "あんそ", "温泉");
+    engine.refresh_user_dictionaries(Some(temp_dir.path()), true);
+    engine.dicts.user_dict_last_checked = Some(SystemTime::now());
+
+    let after = candidate_texts(&engine.build_prediction_candidates("あんそ"));
+    assert_eq!(after, vec!["暗所", "温泉"]);
 }
 
 #[test]

@@ -181,6 +181,8 @@ impl InputMethodEngine {
     /// `skip_learning` is set by the Tab path to omit learning-cache
     /// candidates (Space/Down keep the default learning-included behavior).
     pub(super) fn start_conversion(&mut self, skip_learning: bool) -> EngineResult {
+        self.refresh_user_dictionaries(None, false);
+
         // Flush any remaining romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
@@ -543,7 +545,9 @@ impl InputMethodEngine {
     /// Prediction-only candidates shown while composing. This deliberately
     /// excludes per-key model inference and system dictionary results: the
     /// window is for user history/user dictionary predictions, not conversion.
-    pub(super) fn build_prediction_candidates(&self, reading: &str) -> Vec<Candidate> {
+    pub(super) fn build_prediction_candidates(&mut self, reading: &str) -> Vec<Candidate> {
+        self.refresh_user_dictionaries(None, false);
+
         if self.input_mode == InputMode::Emoji {
             return self.lookup_rewriter_variants(reading);
         }

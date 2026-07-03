@@ -77,6 +77,29 @@ python3 scripts/mozc_user_dictionary_db_to_tsv.py \
 killall KarukanIME
 ```
 
+### 手順C: gtype フィードバック辞書を自動同期
+
+gtype の誤変換履歴を API から取り込み、読み中断なくユーザー辞書を更新します。
+APIに接続できない場合は `~/Library/Application Support/GtypeMac/karukan_feedback.tsv` をフォールバックします。
+1件ごとの不正行はスキップされ、`reading<TAB>correct<TAB>名詞<TAB>gtype feedback` 形式で出力します。
+
+```bash
+python3 scripts/gtype_feedback_sync.py \
+  "$HOME/Library/Application Support/com.karukan.karukan-im/user_dicts/gtype_feedback.tsv"
+```
+
+launchd で 15分ごとの実行 + `karukan_feedback.tsv` 監視を有効化:
+```bash
+mkdir -p "$HOME/Library/LaunchAgents"
+cp scripts/com.kazuph.karukan.gtype-sync.plist \
+  "$HOME/Library/LaunchAgents/com.kazuph.karukan.gtype-sync.plist"
+launchctl load -w "$HOME/Library/LaunchAgents/com.kazuph.karukan.gtype-sync.plist"
+```
+
+更新確認は `python3 scripts/gtype_feedback_sync.py ...` を直接実行して
+`user_dicts` の `gtype_feedback.tsv` を確認、または
+`tail -f "$HOME/Library/LaunchAgents/com.kazuph.karukan.gtype-sync.log"`（未設定時は標準出力）で監視します。
+
 ### 注意
 
 - 読みが `:` で始まるエントリ（絵文字パック等）は、karukan では `:` が Emoji モードのトリガーのため読みとして到達不能です。手順Bのスクリプトは自動で除外します（karukan は絵文字入力を標準搭載しているため不要）

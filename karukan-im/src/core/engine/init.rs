@@ -1,6 +1,9 @@
 //! Engine initialization (model loading, dictionary setup)
 
 use anyhow::{Context, Result};
+use std::fs;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 use tracing::debug;
 
 use crate::config::settings::StrategyMode;
@@ -27,6 +30,8 @@ fn threads_label(n_threads: u32) -> String {
 }
 
 impl InputMethodEngine {
+    const USER_DICT_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
     /// Full engine initialization from user settings: system dictionary,
     /// user dictionaries, learning cache, and conversion models according
     /// to the configured strategy.
@@ -221,35 +226,78 @@ impl InputMethodEngine {
     ///
     /// Default directory: `~/.local/share/karukan-im/user_dicts/`
     pub fn init_user_dictionaries(&mut self) {
-        if self.dicts.user.is_some() {
-            return;
-        }
+        self.refresh_user_dictionaries(None, false);
+    }
 
-        let Some(dir) = Settings::user_dict_dir() else {
-            debug!("Could not determine user dictionary directory");
+    #[cfg(test)]
+    pub(super) fn init_user_dictionaries_with_dir(&mut self, dir: &Path) {
+        self.refresh_user_dictionaries(Some(dir), true);
+    }
+
+    pub(super) fn refresh_user_dictionaries(&mut self, dir: Option<&Path>, force: bool) {
+        let dir = match dir {
+            Some(dir) => dir.to_path_buf(),
+            None => match Settings::user_dict_dir() {
+                Some(dir) => dir,
+                None => {
+                    debug!("Could not determine user dictionary directory");
+                    return;
+                }
+            },
+        };
+
+        let now = SystemTime::now();
+        if !force {
+            let due = self
+                .dicts
+                .user_dict_last_checked
+                .and_then(|checked| now.duration_since(checked).ok())
+                .is_none_or(|elapsed| elapsed >= Self::USER_DICT_CHECK_INTERVAL);
+            if !due {
+                return;
+            }
+        }
+        self.dicts.user_dict_last_checked = Some(now);
+
+        let Ok(entries) = fs::read_dir(&dir) else {
+            debug!("Failed to read user dictionary directory {:?}", dir);
             return;
         };
+
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut max_mtime: Option<SystemTime> = None;
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(metadata) = entry.metadata()
+                && let Ok(mtime) = metadata.modified()
+            {
+                max_mtime = Some(max_mtime.map_or(mtime, |current| current.max(mtime)));
+            }
+            paths.push(path);
+        }
 
         if !dir.exists() {
             debug!(
                 "User dictionary directory {:?} does not exist, skipping",
                 dir
             );
+            self.dicts.user = None;
+            self.dicts.user_dict_max_mtime = None;
             return;
         }
 
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            debug!("Failed to read user dictionary directory {:?}", dir);
-            return;
-        };
-        let mut paths: Vec<std::path::PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.is_file())
-            .collect();
-
         if paths.is_empty() {
-            debug!("No files in user dictionary directory {:?}", dir);
+            if self.dicts.user.is_some() || self.dicts.user_dict_max_mtime.is_some() {
+                self.dicts.user = None;
+                self.dicts.user_dict_max_mtime = None;
+            }
+            return;
+        }
+
+        if !force && self.dicts.user.is_some() && self.dicts.user_dict_max_mtime == max_mtime {
             return;
         }
 
@@ -269,23 +317,26 @@ impl InputMethodEngine {
             }
         }
 
-        if dicts.is_empty() {
-            return;
-        }
-
-        match Dictionary::merge(dicts) {
-            Ok(Some(merged)) => {
-                debug!(
-                    "User dictionaries merged successfully ({} files from {:?})",
-                    paths.len(),
-                    dir
-                );
-                self.dicts.user = Some(merged);
-            }
-            Ok(None) => {}
+        let has_loaded_files = !dicts.is_empty();
+        let merged = match Dictionary::merge(dicts) {
+            Ok(merged) => merged,
             Err(e) => {
                 debug!("Failed to merge user dictionaries: {}", e);
+                None
             }
+        };
+
+        self.dicts.user = merged;
+        self.dicts.user_dict_max_mtime = max_mtime;
+
+        if self.dicts.user.is_some() {
+            debug!(
+                "User dictionaries merged successfully ({} files from {:?})",
+                paths.len(),
+                dir
+            );
+        } else if has_loaded_files {
+            debug!("No user dictionaries could be loaded from {:?}", dir);
         }
     }
 }

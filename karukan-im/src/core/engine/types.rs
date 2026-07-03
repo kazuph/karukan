@@ -210,6 +210,10 @@ pub(in crate::core) struct Dictionaries {
     pub system: Option<Dictionary>,
     /// User dictionary (merged from user_dict_paths)
     pub user: Option<Dictionary>,
+    /// Last wall-clock time we checked the user dictionary directory.
+    pub user_dict_last_checked: Option<std::time::SystemTime>,
+    /// Maximum mtime among user dictionary files at the last successful scan.
+    pub user_dict_max_mtime: Option<std::time::SystemTime>,
 }
 
 /// Conversion model dispatch strategy based on input length

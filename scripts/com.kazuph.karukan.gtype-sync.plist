@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kazuph.karukan.gtype-sync</string>
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/kazuph/Library/Application Support/GtypeMac/karukan_feedback.tsv</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>ProgramArguments</key>
+    <array>
+        <string>python3</string>
+        <string>/Users/kazuph/src/github.com/kazuph/karukan/.worktree/feature/google-ime-ux/scripts/gtype_feedback_sync.py</string>
+        <string>/Users/kazuph/Library/Application Support/com.karukan.karukan-im/user_dicts/gtype_feedback.tsv</string>
+    </array>
+</dict>
+</plist>
