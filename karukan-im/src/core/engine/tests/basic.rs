@@ -44,6 +44,46 @@ fn test_engine_commit_composing() {
 }
 
 #[test]
+fn trailing_n_commits_as_nasal_n() {
+    let mut engine = InputMethodEngine::new();
+
+    for ch in "karukan".chars() {
+        engine.process_key(&press(ch));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "かるかn");
+
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(result.consumed);
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(text) if text == "かるかん"))
+    );
+}
+
+#[test]
+fn trailing_n_starts_conversion_as_nasal_n() {
+    let mut engine = InputMethodEngine::new();
+
+    for ch in "karukan".chars() {
+        engine.process_key(&press(ch));
+    }
+
+    let result = engine.process_key(&press_key(Keysym::SPACE));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert!(
+        engine
+            .candidates()
+            .unwrap()
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.reading.as_deref() == Some("かるかん"))
+    );
+}
+
+#[test]
 fn test_engine_backspace() {
     let mut engine = InputMethodEngine::new();
 

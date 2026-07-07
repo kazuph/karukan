@@ -159,3 +159,85 @@ fn committing_resized_conversion_keeps_remainder() {
             .any(|a| matches!(a, EngineAction::Commit(text) if text == &expected_commit))
     );
 }
+
+#[test]
+fn right_arrow_after_resize_moves_to_remainder_conversion() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press('u'));
+    engine.process_key(&press('e'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+
+    let preedit = engine.preedit().unwrap().text().to_string();
+    let caret = engine.preedit().unwrap().caret();
+    let selected_text = preedit.chars().take(caret).collect::<String>();
+    let remainder = preedit.chars().skip(caret).collect::<String>();
+    assert_eq!(remainder, "うえ");
+
+    let result = engine.process_key(&press_key(Keysym::RIGHT));
+    assert!(result.consumed);
+    assert!(
+        !result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(_)))
+    );
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert!(engine.preedit().unwrap().text().starts_with(&selected_text));
+    assert!(
+        engine
+            .candidates()
+            .unwrap()
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.reading.as_deref() == Some("うえ"))
+    );
+
+    let result = engine.process_key(&press_key(Keysym::LEFT));
+    assert!(result.consumed);
+    assert!(
+        !result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(_)))
+    );
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), preedit);
+    assert!(
+        engine
+            .candidates()
+            .unwrap()
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.reading.as_deref() == Some("あい"))
+    );
+}
+
+#[test]
+fn commit_after_right_arrow_conversion_includes_previous_segment() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press('u'));
+    engine.process_key(&press('e'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+
+    engine.process_key(&press_key(Keysym::RIGHT));
+    let after_advance = engine.preedit().unwrap().text().to_string();
+
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(result.consumed);
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(text) if text == &after_advance))
+    );
+}

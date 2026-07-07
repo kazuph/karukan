@@ -199,6 +199,7 @@ impl InputMethodEngine {
         }
 
         self.converters.romaji.reset();
+        self.conversion_history.clear();
         self.input_buf.cursor_pos = reading.chars().count();
 
         // Get candidates from kanji converter (use full num_candidates for explicit conversion)
@@ -296,25 +297,52 @@ impl InputMethodEngine {
     }
 
     fn build_conversion_preedit(&self, selected_text: &str) -> Preedit {
+        let prefix_segments = self
+            .conversion_history
+            .iter()
+            .map(|segment| PreeditSegment::new(segment.surface.clone(), AttributeType::Underline));
         let remainder = self.conversion_remainder();
+        let selected = PreeditSegment::highlighted(selected_text);
+        let caret = self.conversion_history_text_len() + selected_text.chars().count();
         if remainder.is_empty() {
-            return Preedit::from_segments(
-                vec![PreeditSegment::highlighted(selected_text)],
-                selected_text.chars().count(),
-            );
+            return Preedit::from_segments(prefix_segments.chain([selected]).collect(), caret);
         }
 
         Preedit::from_segments(
-            vec![
-                PreeditSegment::highlighted(selected_text),
-                PreeditSegment::new(remainder, AttributeType::Underline),
-            ],
-            selected_text.chars().count(),
+            prefix_segments
+                .chain([
+                    selected,
+                    PreeditSegment::new(remainder, AttributeType::Underline),
+                ])
+                .collect(),
+            caret,
         )
     }
 
+    fn conversion_history_text(&self) -> String {
+        self.conversion_history
+            .iter()
+            .map(|segment| segment.surface.as_str())
+            .collect()
+    }
+
+    fn conversion_history_text_len(&self) -> usize {
+        self.conversion_history
+            .iter()
+            .map(|segment| segment.surface.chars().count())
+            .sum()
+    }
+
+    fn conversion_history_reading(&self) -> String {
+        self.conversion_history
+            .iter()
+            .map(|segment| segment.reading.as_str())
+            .collect()
+    }
+
     fn selected_conversion_commit_text(&self, selected_text: &str) -> String {
-        let mut text = selected_text.to_string();
+        let mut text = self.conversion_history_text();
+        text.push_str(selected_text);
         text.push_str(&self.conversion_remainder());
         text
     }
@@ -784,7 +812,8 @@ impl InputMethodEngine {
             Keysym::ESCAPE => self.cancel_conversion(),
             Keysym::LEFT if key.modifiers.shift_key => self.resize_conversion_target(-1),
             Keysym::RIGHT if key.modifiers.shift_key => self.resize_conversion_target(1),
-            Keysym::LEFT | Keysym::RIGHT => EngineResult::consumed(),
+            Keysym::RIGHT => self.advance_conversion_target(),
+            Keysym::LEFT => self.retreat_conversion_target(),
             Keysym::TAB if key.modifiers.shift_key => self.prev_candidate(),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
@@ -831,6 +860,54 @@ impl InputMethodEngine {
         }
     }
 
+    fn advance_conversion_target(&mut self) -> EngineResult {
+        let remainder = self.conversion_remainder();
+        if remainder.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        let Some((selected_text, reading)) = self.selected_conversion_info() else {
+            return EngineResult::not_consumed();
+        };
+
+        if self.input_mode != InputMode::Emoji
+            && let Some(reading) = &reading
+        {
+            self.record_learning(reading, &selected_text);
+        }
+
+        let segment_reading = self.conversion_target_reading();
+        self.conversion_history.push(ConversionSegment {
+            reading: segment_reading,
+            surface: selected_text,
+        });
+        self.input_buf.text = remainder;
+        self.input_buf.cursor_pos = self.input_buf.text.chars().count();
+        let reading = self.conversion_target_reading();
+        let candidate_list = self.candidate_list_for_reading(&reading);
+        if candidate_list.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        self.enter_conversion_state(&reading, candidate_list)
+    }
+
+    fn retreat_conversion_target(&mut self) -> EngineResult {
+        let Some(segment) = self.conversion_history.pop() else {
+            return EngineResult::consumed();
+        };
+
+        let reading = segment.reading;
+        self.input_buf.text = format!("{}{}", reading, self.input_buf.text);
+        self.input_buf.cursor_pos = reading.chars().count();
+        let candidate_list = self.candidate_list_for_reading(&reading);
+        if candidate_list.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        self.enter_conversion_state(&reading, candidate_list)
+    }
+
     /// Record a conversion selection in the learning cache.
     pub(super) fn record_learning(&mut self, reading: &str, surface: &str) {
         if let Some(cache) = &mut self.learning {
@@ -860,6 +937,7 @@ impl InputMethodEngine {
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();
+        self.conversion_history.clear();
         self.exit_emoji_mode();
 
         EngineResult::consumed()
@@ -884,6 +962,7 @@ impl InputMethodEngine {
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();
+        self.conversion_history.clear();
         self.exit_emoji_mode();
 
         // Start new input with the character
@@ -902,7 +981,11 @@ impl InputMethodEngine {
         if !matches!(self.state, InputState::Conversion { .. }) {
             return EngineResult::not_consumed();
         }
-        let reading = self.input_buf.text.clone();
+        let reading = format!(
+            "{}{}",
+            self.conversion_history_reading(),
+            self.input_buf.text
+        );
 
         if reading.is_empty() {
             self.state = InputState::Empty;
@@ -919,6 +1002,7 @@ impl InputMethodEngine {
 
         // Reset romaji converter and set output to reading
         self.converters.romaji.reset();
+        self.conversion_history.clear();
         // We need to push each character to rebuild the state
         for ch in reading.chars() {
             self.converters.romaji.push(ch);
@@ -1010,6 +1094,7 @@ impl InputMethodEngine {
         // Commit immediately after digit selection
 
         self.state = InputState::Empty;
+        self.conversion_history.clear();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))

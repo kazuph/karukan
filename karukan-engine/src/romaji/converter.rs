@@ -198,6 +198,13 @@ impl RomajiConverter {
         let mut result = String::new();
 
         while !self.buffer.is_empty() {
+            if self.buffer == "n" {
+                result.push('ん');
+                self.output.push('ん');
+                self.buffer.clear();
+                break;
+            }
+
             let search = self.trie.search_longest(&self.buffer);
 
             if let Some(h) = search.output {
@@ -363,6 +370,19 @@ mod tests {
         let flushed = conv.flush();
         assert_eq!(flushed, "k");
         assert_eq!(conv.output(), "k");
+        assert_eq!(conv.buffer(), "");
+    }
+
+    #[test]
+    fn test_flush_trailing_n_as_nn() {
+        let mut conv = RomajiConverter::new();
+        conv.push('n');
+        assert_eq!(conv.output(), "");
+        assert_eq!(conv.buffer(), "n");
+
+        let flushed = conv.flush();
+        assert_eq!(flushed, "ん");
+        assert_eq!(conv.output(), "ん");
         assert_eq!(conv.buffer(), "");
     }
 

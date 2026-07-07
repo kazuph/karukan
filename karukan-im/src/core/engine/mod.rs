@@ -80,6 +80,12 @@ struct AnnotatedCandidate {
     description: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::core) struct ConversionSegment {
+    reading: String,
+    surface: String,
+}
+
 impl AnnotatedCandidate {
     fn new(text: impl Into<String>, source: CandidateSource) -> Self {
         Self {
@@ -156,6 +162,8 @@ pub struct InputMethodEngine {
     /// Prediction candidates currently visible while composing. Stored so
     /// Tab/Down can select exactly what the user was already seeing.
     composing_candidates: Option<CandidateList>,
+    /// Segments already accepted while moving through a multi-part conversion.
+    conversion_history: Vec<ConversionSegment>,
 }
 
 impl InputMethodEngine {
@@ -180,6 +188,7 @@ impl InputMethodEngine {
             dicts: Dictionaries::default(),
             learning: None,
             composing_candidates: None,
+            conversion_history: Vec::new(),
         }
     }
 
@@ -252,6 +261,7 @@ impl InputMethodEngine {
         self.live.text.clear();
         self.chunks.clear();
         self.composing_candidates = None;
+        self.conversion_history.clear();
         self.metrics = ConversionMetrics::default();
     }
 
@@ -518,13 +528,30 @@ impl InputMethodEngine {
                 text
             }
             InputState::Conversion { candidates, .. } => {
-                let text = candidates.selected_text().unwrap_or("").to_string();
+                let prefix: String = self
+                    .conversion_history
+                    .iter()
+                    .map(|segment| segment.surface.as_str())
+                    .collect();
+                let remainder: String = self
+                    .input_buf
+                    .text
+                    .chars()
+                    .skip(self.input_buf.cursor_pos)
+                    .collect();
+                let mut text = prefix;
+                text.push_str(candidates.selected_text().unwrap_or(""));
+                text.push_str(&remainder);
                 let reading = candidates.selected().and_then(|c| c.reading.clone());
+                let selected_text = candidates.selected_text().map(str::to_string);
                 // Record conversion result in learning cache
                 if let Some(reading) = &reading {
-                    self.record_learning(reading, &text);
+                    if let Some(selected_text) = &selected_text {
+                        self.record_learning(reading, selected_text);
+                    }
                 }
                 self.input_buf.clear();
+                self.conversion_history.clear();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
                 text
