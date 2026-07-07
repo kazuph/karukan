@@ -194,12 +194,12 @@ impl InputMethodEngine {
         // in the conversion candidate list even if the re-inference uses a different strategy.
         let prev_suggest_text = std::mem::take(&mut self.live.text);
 
-        self.converters.romaji.reset();
-        self.input_buf.cursor_pos = 0;
-
         if reading.is_empty() {
             return EngineResult::consumed();
         }
+
+        self.converters.romaji.reset();
+        self.input_buf.cursor_pos = reading.chars().count();
 
         // Get candidates from kanji converter (use full num_candidates for explicit conversion)
         let mut candidates =
@@ -258,11 +258,7 @@ impl InputMethodEngine {
     /// returns an EngineResult with preedit, candidates, and aux text actions.
     fn enter_conversion_state(&mut self, reading: &str, candidates: CandidateList) -> EngineResult {
         let selected_text = candidates.selected_text().unwrap_or(reading).to_string();
-
-        let preedit = Preedit::from_segments(
-            vec![PreeditSegment::highlighted(&selected_text)],
-            selected_text.chars().count(),
-        );
+        let preedit = self.build_conversion_preedit(&selected_text);
 
         self.state = InputState::Conversion {
             preedit: preedit.clone(),
@@ -276,6 +272,93 @@ impl InputMethodEngine {
             .with_action(EngineAction::UpdateAuxText(
                 self.format_aux_conversion_with_page(reading, Some(&candidates)),
             ))
+    }
+
+    fn conversion_target_len(&self) -> usize {
+        let total = self.input_buf.text.chars().count();
+        self.input_buf.cursor_pos.min(total)
+    }
+
+    fn conversion_target_reading(&self) -> String {
+        self.input_buf
+            .text
+            .chars()
+            .take(self.conversion_target_len())
+            .collect()
+    }
+
+    fn conversion_remainder(&self) -> String {
+        self.input_buf
+            .text
+            .chars()
+            .skip(self.conversion_target_len())
+            .collect()
+    }
+
+    fn build_conversion_preedit(&self, selected_text: &str) -> Preedit {
+        let remainder = self.conversion_remainder();
+        if remainder.is_empty() {
+            return Preedit::from_segments(
+                vec![PreeditSegment::highlighted(selected_text)],
+                selected_text.chars().count(),
+            );
+        }
+
+        Preedit::from_segments(
+            vec![
+                PreeditSegment::highlighted(selected_text),
+                PreeditSegment::new(remainder, AttributeType::Underline),
+            ],
+            selected_text.chars().count(),
+        )
+    }
+
+    fn selected_conversion_commit_text(&self, selected_text: &str) -> String {
+        let mut text = selected_text.to_string();
+        text.push_str(&self.conversion_remainder());
+        text
+    }
+
+    fn candidate_list_for_reading(&mut self, reading: &str) -> CandidateList {
+        CandidateList::new(
+            self.build_conversion_candidates(reading, self.config.num_candidates, false)
+                .into_iter()
+                .map(|ac| {
+                    let label = ac.source.label();
+                    Candidate {
+                        text: ac.text,
+                        reading: Some(ac.reading.unwrap_or_else(|| reading.to_string())),
+                        source_label: (!label.is_empty()).then(|| label.to_string()),
+                        description: ac.description,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    fn resize_conversion_target(&mut self, delta: isize) -> EngineResult {
+        if !matches!(self.state, InputState::Conversion { .. }) {
+            return EngineResult::not_consumed();
+        }
+
+        let total = self.input_buf.text.chars().count();
+        let current = self.conversion_target_len();
+        let next = if delta < 0 {
+            current.saturating_sub(1).max(1)
+        } else {
+            (current + 1).min(total)
+        };
+        if next == current {
+            return EngineResult::consumed();
+        }
+
+        self.input_buf.cursor_pos = next;
+        let reading = self.conversion_target_reading();
+        let candidate_list = self.candidate_list_for_reading(&reading);
+        if candidate_list.is_empty() {
+            return EngineResult::consumed();
+        }
+        self.enter_conversion_state(&reading, candidate_list)
     }
 
     /// Search user and system dictionaries for candidates matching a reading.
@@ -699,6 +782,10 @@ impl InputMethodEngine {
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
+            Keysym::LEFT if key.modifiers.shift_key => self.resize_conversion_target(-1),
+            Keysym::RIGHT if key.modifiers.shift_key => self.resize_conversion_target(1),
+            Keysym::LEFT | Keysym::RIGHT => EngineResult::consumed(),
+            Keysym::TAB if key.modifiers.shift_key => self.prev_candidate(),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
             Keysym::PAGE_DOWN => self.next_candidate_page(),
@@ -753,9 +840,10 @@ impl InputMethodEngine {
 
     /// Commit the current conversion
     fn commit_conversion(&mut self) -> EngineResult {
-        let Some((text, reading)) = self.selected_conversion_info() else {
+        let Some((selected_text, reading)) = self.selected_conversion_info() else {
             return EngineResult::not_consumed();
         };
+        let text = self.selected_conversion_commit_text(&selected_text);
 
         if text.is_empty() {
             return EngineResult::consumed();
@@ -767,7 +855,7 @@ impl InputMethodEngine {
         if self.input_mode != InputMode::Emoji
             && let Some(reading) = &reading
         {
-            self.record_learning(reading, &text);
+            self.record_learning(reading, &selected_text);
         }
 
         self.state = InputState::Empty;
@@ -783,14 +871,15 @@ impl InputMethodEngine {
 
     /// Commit current conversion and then process a new character as fresh input
     fn commit_conversion_and_continue(&mut self, ch: char) -> EngineResult {
-        let Some((text, reading)) = self.selected_conversion_info() else {
+        let Some((selected_text, reading)) = self.selected_conversion_info() else {
             return EngineResult::not_consumed();
         };
+        let text = self.selected_conversion_commit_text(&selected_text);
 
         if self.input_mode != InputMode::Emoji
             && let Some(reading) = &reading
         {
-            self.record_learning(reading, &text);
+            self.record_learning(reading, &selected_text);
         }
 
         self.state = InputState::Empty;
@@ -916,6 +1005,7 @@ impl InputMethodEngine {
         if let Some(reading) = &reading {
             self.record_learning(reading, &selected_text);
         }
+        let commit_text = self.selected_conversion_commit_text(&selected_text);
 
         // Commit immediately after digit selection
 
@@ -925,7 +1015,7 @@ impl InputMethodEngine {
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
             .with_action(EngineAction::HideCandidates)
             .with_action(EngineAction::HideAuxText)
-            .with_action(EngineAction::Commit(selected_text))
+            .with_action(EngineAction::Commit(commit_text))
     }
 
     /// Update preedit after candidate selection change
@@ -934,12 +1024,7 @@ impl InputMethodEngine {
         selected_text: &str,
         candidates: &CandidateList,
     ) -> EngineResult {
-        let mut preedit = Preedit::with_text(selected_text);
-        preedit.set_attributes(vec![PreeditAttribute::new(
-            0,
-            selected_text.chars().count(),
-            AttributeType::Highlight,
-        )]);
+        let preedit = self.build_conversion_preedit(selected_text);
 
         if let Some(p) = self.state.preedit_mut() {
             *p = preedit.clone();

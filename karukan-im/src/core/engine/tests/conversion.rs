@@ -69,3 +69,93 @@ fn test_alphabet_mode_space_inserts_literal_space() {
     engine.process_key(&press('k'));
     assert_eq!(engine.preedit().unwrap().text(), "New york");
 }
+
+#[test]
+fn shift_tab_moves_to_previous_conversion_candidate() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let first = engine.preedit().unwrap().text().to_string();
+    engine.process_key(&press_key(Keysym::TAB));
+    let second = engine.preedit().unwrap().text().to_string();
+    assert_ne!(second, first);
+
+    engine.process_key(&press_shift_key(Keysym::TAB));
+    assert_eq!(engine.preedit().unwrap().text(), first);
+}
+
+#[test]
+fn plain_arrows_are_consumed_during_conversion() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    let first = engine.preedit().unwrap().text().to_string();
+
+    let left = engine.process_key(&press_key(Keysym::LEFT));
+    assert!(left.consumed);
+    assert!(left.actions.is_empty());
+    assert_eq!(engine.preedit().unwrap().text(), first);
+
+    let right = engine.process_key(&press_key(Keysym::RIGHT));
+    assert!(right.consumed);
+    assert!(right.actions.is_empty());
+    assert_eq!(engine.preedit().unwrap().text(), first);
+}
+
+#[test]
+fn shift_arrows_resize_conversion_target() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press('u'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+    let preedit = engine.preedit().unwrap();
+    let resized_text = preedit.text().to_string();
+    assert!(resized_text.ends_with('う'));
+    assert_eq!(preedit.caret(), resized_text.chars().count() - 1);
+    assert_eq!(preedit.attributes()[0].attr_type, AttributeType::Highlight);
+    assert_eq!(preedit.attributes()[0].start, 0);
+    assert_eq!(preedit.attributes()[0].end, preedit.caret());
+    assert_eq!(preedit.attributes()[1].attr_type, AttributeType::Underline);
+    assert_eq!(preedit.attributes()[1].start, preedit.caret());
+    assert_eq!(preedit.attributes()[1].end, resized_text.chars().count());
+
+    engine.process_key(&press_shift_key(Keysym::RIGHT));
+    let preedit = engine.preedit().unwrap();
+    assert_eq!(preedit.text(), "あいう");
+    assert_eq!(preedit.caret(), 3);
+    assert_eq!(preedit.attributes().len(), 1);
+    assert_eq!(preedit.attributes()[0].attr_type, AttributeType::Highlight);
+    assert_eq!(preedit.attributes()[0].start, 0);
+    assert_eq!(preedit.attributes()[0].end, 3);
+}
+
+#[test]
+fn committing_resized_conversion_keeps_remainder() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press('u'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+    let expected_commit = engine.preedit().unwrap().text().to_string();
+
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(result.consumed);
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(text) if text == &expected_commit))
+    );
+}
