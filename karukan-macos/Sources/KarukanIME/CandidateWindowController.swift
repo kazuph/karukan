@@ -12,6 +12,7 @@ final class CandidateWindowController: NSObject {
     private static let candidateFontSize: CGFloat = 18
     private static let footerFontSize: CGFloat = 13
     private static let minPanelWidth: CGFloat = 160
+    private static let screenEdgePadding: CGFloat = 4
 
     private let panel: NSPanel
     private let stackView: NSStackView
@@ -189,35 +190,60 @@ final class CandidateWindowController: NSObject {
 
         stackView.layoutSubtreeIfNeeded()
         let contentSize = stackView.fittingSize
-        let panelWidth = max(contentSize.width + 16, Self.minPanelWidth)
-        let panelHeight = contentSize.height + 8
+        let panelSize = NSSize(
+            width: max(contentSize.width + 16, Self.minPanelWidth),
+            height: contentSize.height + 8
+        )
 
         guard cursorRect != .zero else {
             panel.setFrame(
-                NSRect(x: 100, y: 100, width: panelWidth, height: panelHeight), display: true)
+                NSRect(x: 100, y: 100, width: panelSize.width, height: panelSize.height),
+                display: true)
             panel.orderFront(nil)
             return
         }
 
-        // Flip above the cursor when the panel would fall off the bottom of
-        // the screen.
-        let showAbove: Bool
-        if let screen = NSScreen.main {
-            showAbove = cursorRect.origin.y - panelHeight < screen.visibleFrame.origin.y
-        } else {
-            showAbove = false
-        }
-
-        let originY: CGFloat
-        if showAbove {
-            originY = cursorRect.origin.y + cursorRect.size.height
-        } else {
-            originY = cursorRect.origin.y - panelHeight
-        }
+        let visibleFrame = Self.visibleFrame(containing: cursorRect)
 
         panel.setFrame(
-            NSRect(x: cursorRect.origin.x, y: originY, width: panelWidth, height: panelHeight),
-            display: true)
+            Self.panelFrame(cursorRect: cursorRect, panelSize: panelSize, visibleFrame: visibleFrame),
+            display: true
+        )
         panel.orderFront(nil)
+    }
+
+    static func panelFrame(cursorRect: NSRect, panelSize: NSSize, visibleFrame: NSRect) -> NSRect {
+        let padding = screenEdgePadding
+        let maxWidth = max(1, visibleFrame.width - padding * 2)
+        let width = min(panelSize.width, maxWidth)
+        let height = min(panelSize.height, max(1, visibleFrame.height - padding * 2))
+
+        let minX = visibleFrame.minX + padding
+        let maxX = visibleFrame.maxX - padding - width
+        let x = clamp(cursorRect.minX, min: minX, max: max(minX, maxX))
+
+        let showAbove = cursorRect.minY - height < visibleFrame.minY + padding
+        let preferredY = showAbove ? cursorRect.maxY : cursorRect.minY - height
+        let minY = visibleFrame.minY + padding
+        let maxY = visibleFrame.maxY - padding - height
+        let y = clamp(preferredY, min: minY, max: max(minY, maxY))
+
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private static func visibleFrame(containing cursorRect: NSRect) -> NSRect {
+        if let screen = NSScreen.screens.first(where: { screen in
+            screen.visibleFrame.intersects(cursorRect)
+                || screen.frame.intersects(cursorRect)
+                || screen.visibleFrame.contains(cursorRect.origin)
+                || screen.frame.contains(cursorRect.origin)
+        }) {
+            return screen.visibleFrame
+        }
+        return NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
+    }
+
+    private static func clamp(_ value: CGFloat, min minValue: CGFloat, max maxValue: CGFloat) -> CGFloat {
+        min(max(value, minValue), maxValue)
     }
 }
