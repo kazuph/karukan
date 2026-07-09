@@ -215,6 +215,7 @@ mod tests {
         assert_eq!(settings.conversion.num_candidates, 9);
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);
+        assert!(!settings.conversion.live_conversion);
     }
 
     #[test]
@@ -274,6 +275,7 @@ num_candidates = 3
         // Should use default for unspecified values
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);
+        assert!(!settings.conversion.live_conversion);
     }
 
     #[test]
