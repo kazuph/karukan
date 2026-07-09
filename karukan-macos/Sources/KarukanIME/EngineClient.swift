@@ -62,6 +62,18 @@ class EngineClient {
         sendRequest(method: "save_learning", params: [:]) { _ in }
     }
 
+    func adjustLearningCandidateSync(_ request: LearningCandidateRequest) -> KeyResult? {
+        keyResultSync(
+            method: "adjust_learning_candidate",
+            params: [
+                "action": request.action.rawValue,
+                "reading": request.reading,
+                "surface": request.surface,
+            ],
+            timeout: 1.0
+        )
+    }
+
     func setSurroundingTextAsync(text: String, cursorPos: Int) {
         sendRequest(
             method: "set_surrounding_text",

@@ -151,7 +151,13 @@ class KarukanInputController: IMKInputController {
                     cursor: cursor,
                     page: page,
                     totalPages: totalPages,
-                    cursorRect: cursorRect
+                    cursorRect: cursorRect,
+                    onLearningAction: { request in
+                        guard let result = engineClient.adjustLearningCandidateSync(request) else {
+                            return
+                        }
+                        self.apply(actions: result.actions, client: client)
+                    }
                 )
 
             case .hideCandidates:

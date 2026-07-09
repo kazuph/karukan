@@ -24,6 +24,13 @@ pub enum EngineAction {
     HideAuxText,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LearningAdjustment {
+    Delete,
+    Promote,
+    Demote,
+}
+
 /// Result of processing a key event
 #[derive(Debug, Clone, Default)]
 pub struct EngineResult {

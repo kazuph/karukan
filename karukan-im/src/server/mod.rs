@@ -10,13 +10,16 @@ use serde_json::{Value, json};
 
 use crate::config::Settings;
 use crate::core::candidate::CandidateList;
-use crate::core::engine::{EngineAction, EngineConfig, EngineResult, InputMethodEngine};
+use crate::core::engine::{
+    EngineAction, EngineConfig, EngineResult, InputMethodEngine, LearningAdjustment,
+};
 use crate::core::keycode::{KeyEvent, Keysym};
 use crate::core::state::InputState;
 
 use protocol::{
-    Action, CandidateItem, InitResult, KeyResult, PROTOCOL_VERSION, PreeditAttr, ProcessKeyParams,
-    Request, Response, RpcError, SelectCandidateParams, StatusResult, SurroundingTextParams,
+    Action, AdjustLearningCandidateParams, CandidateItem, InitResult, KeyResult,
+    LearningCandidateAction, PROTOCOL_VERSION, PreeditAttr, ProcessKeyParams, Request, Response,
+    RpcError, SelectCandidateParams, StatusResult, SurroundingTextParams,
 };
 
 /// JSON-RPC dispatcher owning the engine instance.
@@ -121,6 +124,18 @@ impl ImServer {
                 self.engine.save_learning();
                 Ok(json!({}))
             }
+            "adjust_learning_candidate" => {
+                let params: AdjustLearningCandidateParams = parse_params(params)?;
+                let action = match params.action {
+                    LearningCandidateAction::Delete => LearningAdjustment::Delete,
+                    LearningCandidateAction::Promote => LearningAdjustment::Promote,
+                    LearningCandidateAction::Demote => LearningAdjustment::Demote,
+                };
+                let result =
+                    self.engine
+                        .adjust_learning_candidate(&params.reading, &params.surface, action);
+                self.key_result(result)
+            }
             "status" => {
                 let state = match self.engine.state() {
                     InputState::Empty => "empty",
@@ -210,7 +225,9 @@ fn to_action(action: EngineAction) -> Action {
                 .iter()
                 .map(|c| CandidateItem {
                     text: c.text.clone(),
+                    reading: c.deletable.then(|| c.reading.clone()).flatten(),
                     description: c.description.clone().filter(|s| !s.is_empty()),
+                    deletable: c.deletable,
                 })
                 .collect(),
             cursor: list.page_cursor(),

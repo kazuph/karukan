@@ -15,6 +15,7 @@
 //! | `reset`                | `{}`                                     | `{}`              |
 //! | `set_surrounding_text` | [`SurroundingTextParams`]                | `{}`              |
 //! | `save_learning`        | `{}`                                     | `{}`              |
+//! | `adjust_learning_candidate` | [`AdjustLearningCandidateParams`]    | [`KeyResult`]     |
 //! | `status`               | `{}`                                     | [`StatusResult`]  |
 //!
 //! Keysyms are XKB keysym values (the same representation used by the
@@ -122,6 +123,21 @@ pub struct SurroundingTextParams {
     pub cursor_pos: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AdjustLearningCandidateParams {
+    pub reading: String,
+    pub surface: String,
+    pub action: LearningCandidateAction,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LearningCandidateAction {
+    Delete,
+    Promote,
+    Demote,
+}
+
 // === Results ===
 
 #[derive(Debug, Serialize)]
@@ -195,8 +211,18 @@ pub struct PreeditAttr {
 #[derive(Debug, Serialize)]
 pub struct CandidateItem {
     pub text: String,
+    /// Learning key for frontend adjustment. Present for learned candidates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading: Option<String>,
     /// Mozc-style right-side comment (e.g. 三点リーダ). Unformatted; the
     /// frontend decides how to display it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// True when the frontend should show learning adjustment controls.
+    #[serde(skip_serializing_if = "is_false")]
+    pub deletable: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

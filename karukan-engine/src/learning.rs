@@ -62,6 +62,56 @@ impl LearningCache {
         self.dirty = true;
     }
 
+    /// Remove one learned conversion entry.
+    pub fn remove(&mut self, reading: &str, surface: &str) -> bool {
+        let Some(entries) = self.entries.get_mut(reading) else {
+            return false;
+        };
+        let before = entries.len();
+        entries.retain(|entry| entry.surface != surface);
+        let removed = entries.len() != before;
+        if entries.is_empty() {
+            self.entries.remove(reading);
+        }
+        if removed {
+            self.dirty = true;
+        }
+        removed
+    }
+
+    /// Boost one learned entry so it wins the next score sort.
+    pub fn promote(&mut self, reading: &str, surface: &str) -> bool {
+        let max_frequency = self
+            .entries
+            .values()
+            .flat_map(|entries| entries.iter().map(|entry| entry.frequency))
+            .max()
+            .unwrap_or(0);
+        let Some(entries) = self.entries.get_mut(reading) else {
+            return false;
+        };
+        let Some(entry) = entries.iter_mut().find(|entry| entry.surface == surface) else {
+            return false;
+        };
+        entry.frequency = max_frequency.saturating_add(1);
+        entry.last_access = now_unix();
+        self.dirty = true;
+        true
+    }
+
+    /// Nudge one learned entry lower without changing the TSV format.
+    pub fn demote(&mut self, reading: &str, surface: &str) -> bool {
+        let Some(entries) = self.entries.get_mut(reading) else {
+            return false;
+        };
+        let Some(entry) = entries.iter_mut().find(|entry| entry.surface == surface) else {
+            return false;
+        };
+        entry.frequency = entry.frequency.saturating_sub(1).max(1);
+        self.dirty = true;
+        true
+    }
+
     /// Exact-match lookup: returns `(surface, score)` pairs sorted by score descending.
     pub fn lookup(&self, reading: &str) -> Vec<(String, f64)> {
         let now = now_unix();
@@ -272,6 +322,47 @@ mod tests {
         let cache = LearningCache::new(100);
         let results = cache.lookup("きょう");
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let mut cache = LearningCache::new(100);
+        cache.record("きょう", "今日");
+        cache.record("きょう", "京");
+
+        assert!(cache.remove("きょう", "今日"));
+        assert!(cache.is_dirty());
+
+        let results = cache.lookup("きょう");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "京");
+        assert!(!cache.remove("きょう", "今日"));
+    }
+
+    #[test]
+    fn test_promote_entry_to_top() {
+        let mut cache = LearningCache::new(100);
+        cache.record("きょう", "今日");
+        cache.record("きょう", "京");
+        cache.record("きょう", "京");
+
+        assert!(cache.promote("きょう", "今日"));
+
+        let results = cache.lookup("きょう");
+        assert_eq!(results[0].0, "今日");
+    }
+
+    #[test]
+    fn test_demote_entry() {
+        let mut cache = LearningCache::new(100);
+        cache.record("きょう", "今日");
+        cache.record("きょう", "今日");
+
+        let before = cache.lookup("きょう")[0].1;
+        assert!(cache.demote("きょう", "今日"));
+        let after = cache.lookup("きょう")[0].1;
+
+        assert!(after < before);
     }
 
     #[test]

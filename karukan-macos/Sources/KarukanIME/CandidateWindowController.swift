@@ -23,6 +23,7 @@ class CandidateWindowController {
         let cursor: Int
         let page: Int
         let totalPages: Int
+        let onLearningAction: (LearningCandidateRequest) -> Void
     }
     private var pageState: PageState?
 
@@ -37,7 +38,7 @@ class CandidateWindowController {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = NSColor.windowBackgroundColor
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
 
         stackView = NSStackView()
         stackView.orientation = .vertical
@@ -64,10 +65,20 @@ class CandidateWindowController {
     /// the panel is already on screen, since the composition anchor
     /// doesn't move mid-composition.
     func show(
-        candidates: [CandidateItem], cursor: Int, page: Int, totalPages: Int, cursorRect: NSRect?
+        candidates: [CandidateItem],
+        cursor: Int,
+        page: Int,
+        totalPages: Int,
+        cursorRect: NSRect?,
+        onLearningAction: @escaping (LearningCandidateRequest) -> Void
     ) {
         pageState = PageState(
-            candidates: candidates, cursor: cursor, page: page, totalPages: totalPages)
+            candidates: candidates,
+            cursor: cursor,
+            page: page,
+            totalPages: totalPages,
+            onLearningAction: onLearningAction
+        )
         render(cursorRect: cursorRect)
     }
 
@@ -95,7 +106,12 @@ class CandidateWindowController {
         }
 
         for (index, candidate) in state.candidates.enumerated() {
-            addCandidateRow(candidate, number: index + 1, selected: index == state.cursor)
+            addCandidateRow(
+                candidate,
+                number: index + 1,
+                selected: index == state.cursor,
+                onLearningAction: state.onLearningAction
+            )
         }
         if state.totalPages > 1 {
             addFooterLabel("[\(state.page + 1)/\(state.totalPages)]")
@@ -115,7 +131,12 @@ class CandidateWindowController {
         rowViews.removeAll()
     }
 
-    private func addCandidateRow(_ candidate: CandidateItem, number: Int, selected: Bool) {
+    private func addCandidateRow(
+        _ candidate: CandidateItem,
+        number: Int,
+        selected: Bool,
+        onLearningAction: @escaping (LearningCandidateRequest) -> Void
+    ) {
         let text = NSMutableAttributedString(
             string: "\(number). \(candidate.text)",
             attributes: [
@@ -136,6 +157,12 @@ class CandidateWindowController {
                 ))
         }
 
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+
         let label = NSTextField(labelWithAttributedString: text)
         label.translatesAutoresizingMaskIntoConstraints = false
         if selected {
@@ -145,8 +172,51 @@ class CandidateWindowController {
             label.backgroundColor = .clear
             label.drawsBackground = false
         }
-        stackView.addArrangedSubview(label)
-        rowViews.append(label)
+        row.addArrangedSubview(label)
+
+        if candidate.deletable, let reading = candidate.reading {
+            let surface = candidate.text
+            row.addArrangedSubview(
+                learningButton(title: "↑") {
+                    onLearningAction(
+                        LearningCandidateRequest(
+                            action: .promote, reading: reading, surface: surface))
+                })
+            row.addArrangedSubview(
+                learningButton(title: "↓") {
+                    onLearningAction(
+                        LearningCandidateRequest(
+                            action: .demote, reading: reading, surface: surface))
+                })
+            row.addArrangedSubview(
+                learningButton(title: "×") {
+                    onLearningAction(
+                        LearningCandidateRequest(
+                            action: .delete, reading: reading, surface: surface))
+                })
+        }
+
+        stackView.addArrangedSubview(row)
+        rowViews.append(row)
+    }
+
+    private func learningButton(title: String, action: @escaping () -> Void) -> NSButton {
+        let button = NSButton(title: title, target: nil, action: nil)
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.font = NSFont.systemFont(ofSize: Self.footerFontSize)
+        button.contentTintColor = NSColor.secondaryLabelColor
+        button.setButtonType(.momentaryPushIn)
+        let sleeve = ClosureSleeve(action)
+        button.target = sleeve
+        button.action = #selector(ClosureSleeve.invoke)
+        objc_setAssociatedObject(
+            button,
+            Unmanaged.passUnretained(button).toOpaque(),
+            sleeve,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        return button
     }
 
     private func addFooterLabel(_ text: String) {
@@ -198,5 +268,17 @@ class CandidateWindowController {
             NSRect(x: cursorRect.origin.x, y: originY, width: panelWidth, height: panelHeight),
             display: true)
         panel.orderFront(nil)
+    }
+}
+
+private final class ClosureSleeve: NSObject {
+    private let action: () -> Void
+
+    init(_ action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc func invoke() {
+        action()
     }
 }

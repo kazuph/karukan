@@ -31,6 +31,9 @@ pub struct Candidate {
     /// rewriter descriptions like `[全]英大文字`. Source labels are
     /// intentionally excluded so they don't duplicate the aux text.
     pub description: Option<String>,
+    /// True when this candidate came from the learning cache and can be
+    /// adjusted from the candidate window.
+    pub deletable: bool,
 }
 
 impl Candidate {
@@ -40,6 +43,7 @@ impl Candidate {
             reading: None,
             source_label: None,
             description: None,
+            deletable: false,
         }
     }
 
@@ -49,6 +53,7 @@ impl Candidate {
             reading: Some(reading.into()),
             source_label: None,
             description: None,
+            deletable: false,
         }
     }
 }
@@ -158,6 +163,24 @@ impl CandidateList {
         let start = self.page_start();
         let end = (start + self.page_size).min(self.candidates.len());
         &self.candidates[start..end]
+    }
+
+    /// Drop a learning-backed candidate from the in-memory list.
+    pub fn remove_deletable(&mut self, reading: &str, text: &str) -> bool {
+        let Some(index) = self.candidates.iter().position(|candidate| {
+            candidate.deletable
+                && candidate.text == text
+                && candidate.reading.as_deref() == Some(reading)
+        }) else {
+            return false;
+        };
+        self.candidates.remove(index);
+        if self.cursor >= self.candidates.len() {
+            self.cursor = self.candidates.len().saturating_sub(1);
+        } else if index <= self.cursor && self.cursor > 0 {
+            self.cursor -= 1;
+        }
+        true
     }
 
     /// Get the cursor position within the current page (0-indexed)

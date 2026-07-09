@@ -109,3 +109,59 @@ fn space_key_keeps_learning_in_composing() {
         texts,
     );
 }
+
+#[test]
+fn adjust_learning_delete_removes_candidate() {
+    let mut engine = engine_with_learned("あい", "藍");
+
+    let result = engine.adjust_learning_candidate("あい", "藍", LearningAdjustment::Delete);
+    assert!(result.consumed);
+
+    let texts: Vec<String> = engine
+        .lookup_learning_candidates("あい")
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert!(
+        !texts.contains(&"藍".to_string()),
+        "Delete must remove learned `藍`, got {:?}",
+        texts,
+    );
+}
+
+#[test]
+fn adjust_learning_promote_moves_candidate_to_top() {
+    let mut engine = engine_with_learned("あい", "藍");
+    engine.record_learning("あい", "愛");
+    engine.record_learning("あい", "愛");
+
+    let before: Vec<String> = engine
+        .lookup_learning_candidates("あい")
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert_eq!(before[0], "愛");
+
+    let result = engine.adjust_learning_candidate("あい", "藍", LearningAdjustment::Promote);
+    assert!(result.consumed);
+
+    let after: Vec<String> = engine
+        .lookup_learning_candidates("あい")
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert_eq!(after[0], "藍");
+}
+
+#[test]
+fn adjust_learning_demote_lowers_candidate_score() {
+    let mut engine = engine_with_learned("あい", "藍");
+    engine.record_learning("あい", "藍");
+
+    let before = engine.learning.as_ref().unwrap().lookup("あい")[0].1;
+    let result = engine.adjust_learning_candidate("あい", "藍", LearningAdjustment::Demote);
+    assert!(result.consumed);
+    let after = engine.learning.as_ref().unwrap().lookup("あい")[0].1;
+
+    assert!(after < before);
+}

@@ -242,6 +242,7 @@ impl InputMethodEngine {
                         reading: Some(cand_reading),
                         source_label: (!label.is_empty()).then(|| label.to_string()),
                         description: ac.description,
+                        deletable: ac.source == CandidateSource::Learning,
                     }
                 })
                 .collect(),
@@ -499,6 +500,7 @@ impl InputMethodEngine {
                     reading: Some(reading.to_string()),
                     source_label: Some(label.clone()),
                     description: None,
+                    deletable: true,
                 });
             }
         }
@@ -517,6 +519,7 @@ impl InputMethodEngine {
                     reading: Some(full_reading),
                     source_label: Some(label.clone()),
                     description: None,
+                    deletable: true,
                 });
             }
         }
@@ -535,6 +538,7 @@ impl InputMethodEngine {
                 reading: Some(reading.to_string()),
                 source_label: Some(ac.source.label().to_string()),
                 description: None,
+                deletable: false,
             })
             .collect()
     }
@@ -553,6 +557,7 @@ impl InputMethodEngine {
                 reading: Some(reading.to_string()),
                 source_label: Some(source_label.clone()),
                 description,
+                deletable: false,
             })
             .collect()
     }
@@ -627,6 +632,31 @@ impl InputMethodEngine {
     pub(super) fn record_learning(&mut self, reading: &str, surface: &str) {
         if let Some(cache) = &mut self.learning {
             cache.record(reading, surface);
+        }
+    }
+
+    pub fn adjust_learning_candidate(
+        &mut self,
+        reading: &str,
+        surface: &str,
+        action: LearningAdjustment,
+    ) -> EngineResult {
+        let Some(cache) = &mut self.learning else {
+            return EngineResult::not_consumed();
+        };
+        let changed = match action {
+            LearningAdjustment::Delete => cache.remove(reading, surface),
+            LearningAdjustment::Promote => cache.promote(reading, surface),
+            LearningAdjustment::Demote => cache.demote(reading, surface),
+        };
+        if !changed {
+            return EngineResult::not_consumed();
+        }
+
+        match &mut self.state {
+            InputState::Composing { .. } => self.refresh_input_state(),
+            InputState::Conversion { .. } => self.start_conversion(false),
+            InputState::Empty => EngineResult::consumed(),
         }
     }
 

@@ -19,7 +19,33 @@ struct PreeditAttr: Decodable {
 
 struct CandidateItem: Decodable {
     let text: String
+    let reading: String?
     let description: String?
+    let deletable: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case text, reading, description, deletable
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        reading = try container.decodeIfPresent(String.self, forKey: .reading)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        deletable = try container.decodeIfPresent(Bool.self, forKey: .deletable) ?? false
+    }
+}
+
+enum LearningCandidateAction: String {
+    case delete
+    case promote
+    case demote
+}
+
+struct LearningCandidateRequest {
+    let action: LearningCandidateAction
+    let reading: String
+    let surface: String
 }
 
 struct InitResult: Decodable {
