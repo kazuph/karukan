@@ -97,20 +97,24 @@ class EngineClient {
             let handle = stdout.fileHandleForReading
             var buffer = Data()
 
-            while true {
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    // EOF: server terminated
-                    self?.failAllPending()
-                    break
-                }
-                buffer.append(chunk)
+            var finished = false
+            while !finished {
+                autoreleasepool {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty {
+                        // EOF: server terminated
+                        self?.failAllPending()
+                        finished = true
+                        return
+                    }
+                    buffer.append(chunk)
 
-                while let newlineRange = buffer.range(of: Data([0x0A])) {
-                    let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
-                    buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
-                    guard !lineData.isEmpty else { continue }
-                    self?.handleResponse(lineData)
+                    while let newlineRange = buffer.range(of: Data([0x0A])) {
+                        let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
+                        buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
+                        guard !lineData.isEmpty else { continue }
+                        self?.handleResponse(lineData)
+                    }
                 }
             }
         }
@@ -134,19 +138,21 @@ class EngineClient {
         ]
 
         requestQueue.async { [weak self] in
-            guard let self,
-                let stdin = self.serverProcess.stdinPipe,
-                var data = try? JSONSerialization.data(withJSONObject: request)
-            else {
-                self?.takePending(id: id)?(nil)
-                return
-            }
-            data.append(0x0A)
-            do {
-                try stdin.fileHandleForWriting.write(contentsOf: data)
-            } catch {
-                NSLog("KarukanIME: failed to write request: \(error)")
-                self.takePending(id: id)?(nil)
+            autoreleasepool {
+                guard let self,
+                    let stdin = self.serverProcess.stdinPipe,
+                    var data = try? JSONSerialization.data(withJSONObject: request)
+                else {
+                    self?.takePending(id: id)?(nil)
+                    return
+                }
+                data.append(0x0A)
+                do {
+                    try stdin.fileHandleForWriting.write(contentsOf: data)
+                } catch {
+                    NSLog("KarukanIME: failed to write request: \(error)")
+                    self.takePending(id: id)?(nil)
+                }
             }
         }
         return id
