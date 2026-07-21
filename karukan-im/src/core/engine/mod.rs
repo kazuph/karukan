@@ -22,7 +22,8 @@ use input_buffer::InputBuffer;
 mod tests;
 
 use karukan_engine::{
-    Dictionary, KanaKanjiConverter, LearningCache, RewriterChain, RomajiConverter,
+    Dictionary, KanaKanjiConverter, LearningCache, Rewriter, RewriterChain, RomajiConverter,
+    SpecialConversionRewriter,
 };
 use tracing::{debug, trace};
 
@@ -46,6 +47,8 @@ enum CandidateSource {
     Dictionary,
     /// Rewriter-generated variant (half-width katakana, symbol)
     Rewriter,
+    /// Dynamic special conversion that must not be persisted in learning.
+    SpecialConversion,
     /// Hiragana/katakana fallback
     Fallback,
 }
@@ -58,6 +61,7 @@ impl CandidateSource {
             CandidateSource::Model => "\u{1F916} AI",                  // 🤖 AI
             CandidateSource::Dictionary => "\u{1F4DA} \u{8F9E}\u{66F8}", // 📚 辞書
             CandidateSource::Rewriter => "\u{1F504} \u{5909}\u{63DB}", // 🔄 変換
+            CandidateSource::SpecialConversion => "\u{1F504} \u{5909}\u{63DB}", // 🔄 変換
             CandidateSource::Fallback => "",
         }
     }
@@ -176,6 +180,7 @@ impl InputMethodEngine {
                 kanji: None,
                 light_kanji: None,
                 rewriters: RewriterChain::default_chain(),
+                special_rewriter: SpecialConversionRewriter,
             },
             surrounding_context: None,
             config: EngineConfig::default(),

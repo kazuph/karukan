@@ -275,7 +275,18 @@ impl InputMethodEngine {
             Keysym::ESCAPE => self.cancel_composing(),
             Keysym::BACKSPACE => self.backspace_composing(),
             Keysym::DELETE => self.delete_composing(),
-            Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
+            Keysym::SPACE if self.input_mode == InputMode::Alphabet => {
+                if self
+                    .converters
+                    .special_rewriter
+                    .rewrite(&self.input_buf.text)
+                    .is_empty()
+                {
+                    self.input_char(' ')
+                } else {
+                    self.start_conversion(false)
+                }
+            }
             Keysym::TAB if self.config.tab_skips_learning => self.start_conversion(true),
             Keysym::TAB | Keysym::DOWN => {
                 if shift_active || key.modifiers.shift_key {

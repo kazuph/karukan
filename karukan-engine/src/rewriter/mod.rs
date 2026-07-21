@@ -22,12 +22,14 @@ mod alphabet;
 mod emoji;
 mod half_katakana;
 mod number;
+mod special;
 mod symbol;
 
 pub use alphabet::AlphabetRewriter;
 pub use emoji::EmojiRewriter;
 pub use half_katakana::HalfWidthKatakanaRewriter;
 pub use number::NumberRewriter;
+pub use special::SpecialConversionRewriter;
 pub use symbol::{SymbolRewriter, description};
 
 /// One result of rewriting: the variant text and an optional description used

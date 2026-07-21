@@ -14,6 +14,6 @@ pub use kanji::{Backend, KanaKanjiConverter};
 pub use learning::LearningCache;
 pub use rewriter::{
     AlphabetRewriter, EmojiRewriter, HalfWidthKatakanaRewriter, RewriteOutput, Rewriter,
-    RewriterChain, SymbolRewriter, description as symbol_description,
+    RewriterChain, SpecialConversionRewriter, SymbolRewriter, description as symbol_description,
 };
 pub use romaji::{BackspaceResult, ConversionEvent, RomajiConverter};
