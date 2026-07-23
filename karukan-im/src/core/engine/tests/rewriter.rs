@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use karukan_engine::{Dictionary, RewriterChain};
+use karukan_engine::{Dictionary, LearningCache, RewriterChain};
 
 use super::*;
 
@@ -312,4 +312,155 @@ fn typing_a_then_space_emits_half_width_katakana() {
     let result = engine.process_key(&press_key(Keysym::SPACE));
     assert!(result.consumed);
     assert_contains(&conversion_state_texts(&engine), "ｱ");
+}
+
+// ---------- explicit special conversions ----------
+
+#[test]
+fn today_conversion_precedes_literal_fallback() {
+    let texts = conversion_texts("きょう");
+    let date_index = texts
+        .iter()
+        .position(|text| text.contains('/') || text.contains("年"))
+        .expect("きょう should produce a formatted date");
+    let fallback_index = texts.iter().position(|text| text == "きょう").unwrap();
+    assert!(date_index < CandidateList::DEFAULT_PAGE_SIZE);
+    assert!(
+        date_index < fallback_index,
+        "special date must stay on the first page"
+    );
+}
+
+#[test]
+fn user_dictionary_stays_ahead_of_special_conversion() {
+    let mut engine = composing_engine("きょう");
+    engine.dicts.user = Some(user_dict_with("きょう", "利用者の今日"));
+
+    let texts: Vec<String> = engine
+        .build_conversion_candidates("きょう", 9, false)
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+
+    assert_eq!(texts.first().map(String::as_str), Some("利用者の今日"));
+    assert!(texts.iter().any(|text| text.contains('/')));
+}
+
+#[test]
+fn dynamic_special_conversion_is_not_learned_after_commit() {
+    let mut engine = InputMethodEngine::new();
+    engine.learning = Some(LearningCache::new(100));
+    type_string(&mut engine, "kyou");
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    let candidates = engine.state().candidates().unwrap();
+    let first = candidates.candidates().first().unwrap();
+    assert!(first.text.contains('/'));
+    assert!(first.reading.is_none());
+
+    let result = engine.select_candidate_on_page(0);
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|action| matches!(action, EngineAction::Commit(text) if text.contains('/')))
+    );
+    assert!(
+        engine
+            .learning
+            .as_ref()
+            .unwrap()
+            .lookup("きょう")
+            .is_empty()
+    );
+}
+
+#[test]
+fn resized_dynamic_special_conversion_is_not_learned_after_commit() {
+    let mut engine = InputMethodEngine::new();
+    engine.learning = Some(LearningCache::new(100));
+    type_string(&mut engine, "kyoua");
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_shift_key(Keysym::LEFT));
+
+    let candidates = engine.state().candidates().unwrap();
+    let first = candidates.candidates().first().unwrap();
+    assert!(first.text.contains('/'));
+    assert!(first.reading.is_none());
+
+    let result = engine.select_candidate_on_page(0);
+    assert!(result.actions.iter().any(
+        |action| matches!(action, EngineAction::Commit(text) if text.contains('/') && text.ends_with('あ'))
+    ));
+    assert!(
+        engine
+            .learning
+            .as_ref()
+            .unwrap()
+            .lookup("きょう")
+            .is_empty()
+    );
+}
+
+#[test]
+fn four_digits_emit_date_and_time_before_numeric_variants() {
+    let texts = conversion_texts("1230");
+    assert_contains(&texts, "12月30日");
+    assert_contains(&texts, "12時30分");
+    assert_contains(&texts, "12時半");
+
+    let date_index = texts.iter().position(|text| text == "12月30日").unwrap();
+    let fallback_index = texts.iter().position(|text| text == "1230").unwrap();
+    assert!(date_index < fallback_index);
+
+    assert_contains(&conversion_texts("645ねん"), "大化元年");
+}
+
+#[test]
+fn calculator_uses_the_real_key_input_path() {
+    let mut engine = InputMethodEngine::new();
+    type_string(&mut engine, "100/8=");
+    assert_eq!(engine.input_buf.text, "100・8=");
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_contains(&conversion_state_texts(&engine), "12.5");
+}
+
+#[test]
+fn unicode_codepoint_converts_from_alphabet_mode_on_space() {
+    let mut engine = InputMethodEngine::new();
+    type_string(&mut engine, "U+611B");
+    assert_eq!(engine.input_mode, InputMode::Alphabet);
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_contains(&conversion_state_texts(&engine), "愛");
+}
+
+#[test]
+fn invalid_unicode_keeps_alphabet_space_behavior() {
+    let mut engine = InputMethodEngine::new();
+    type_string(&mut engine, "U+110000");
+    let result = engine.process_key(&press_key(Keysym::SPACE));
+
+    assert!(engine.state().candidates().is_none());
+    assert_eq!(engine.input_buf.text, "U+110000 ");
+    assert!(result.consumed);
+}
+
+#[test]
+fn version_face_and_correction_candidates_are_available() {
+    let version = conversion_texts("ばーじょん");
+    assert!(version.iter().any(|text| text.starts_with("Karukan ")));
+
+    assert_contains(&conversion_texts("にこにこ"), "(^^)");
+    assert_contains(&conversion_texts("あぼがど"), "アボカド");
+    assert_contains(&conversion_texts("しゅみれーしょん"), "シミュレーション");
+}
+
+#[test]
+fn z_command_reaches_composing_buffer_without_space() {
+    let mut engine = InputMethodEngine::new();
+    type_string(&mut engine, "zl");
+    assert_eq!(engine.input_buf.text, "→");
 }

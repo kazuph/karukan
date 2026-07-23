@@ -68,6 +68,30 @@ impl CandidateBuilder {
 }
 
 impl InputMethodEngine {
+    /// Convert internal candidates into the public candidate list while
+    /// preserving whether each candidate may be learned after selection.
+    fn candidate_list_from_annotated(
+        candidates: Vec<AnnotatedCandidate>,
+        reading: &str,
+    ) -> CandidateList {
+        CandidateList::new(
+            candidates
+                .into_iter()
+                .map(|ac| {
+                    let cand_reading = (ac.source != CandidateSource::SpecialConversion)
+                        .then(|| ac.reading.unwrap_or_else(|| reading.to_string()));
+                    let label = ac.source.label();
+                    Candidate {
+                        text: ac.text,
+                        reading: cand_reading,
+                        source_label: (!label.is_empty()).then(|| label.to_string()),
+                        description: ac.description,
+                    }
+                })
+                .collect(),
+        )
+    }
+
     /// Run kana-kanji conversion for a reading via llama.cpp model.
     ///
     /// Determines the conversion strategy (main model, light model, or parallel beam),
@@ -235,21 +259,7 @@ impl InputMethodEngine {
         //   - `source_label` ← source.label() only (e.g. `🤖 AI`, `📚 辞書`)
         //   - `description`  ← the per-candidate description only
         //                      (e.g. `三点リーダ`, `[全]英大文字`)
-        let candidate_list = CandidateList::new(
-            candidates
-                .into_iter()
-                .map(|ac| {
-                    let cand_reading = ac.reading.unwrap_or_else(|| reading.clone());
-                    let label = ac.source.label();
-                    Candidate {
-                        text: ac.text,
-                        reading: Some(cand_reading),
-                        source_label: (!label.is_empty()).then(|| label.to_string()),
-                        description: ac.description,
-                    }
-                })
-                .collect(),
-        );
+        let candidate_list = Self::candidate_list_from_annotated(candidates, &reading);
         self.enter_conversion_state(&reading, candidate_list)
     }
 
@@ -348,20 +358,9 @@ impl InputMethodEngine {
     }
 
     fn candidate_list_for_reading(&mut self, reading: &str) -> CandidateList {
-        CandidateList::new(
-            self.build_conversion_candidates(reading, self.config.num_candidates, false)
-                .into_iter()
-                .map(|ac| {
-                    let label = ac.source.label();
-                    Candidate {
-                        text: ac.text,
-                        reading: Some(ac.reading.unwrap_or_else(|| reading.to_string())),
-                        source_label: (!label.is_empty()).then(|| label.to_string()),
-                        description: ac.description,
-                    }
-                })
-                .collect(),
-        )
+        let candidates =
+            self.build_conversion_candidates(reading, self.config.num_candidates, false);
+        Self::candidate_list_from_annotated(candidates, reading)
     }
 
     fn resize_conversion_target(&mut self, delta: isize) -> EngineResult {
@@ -442,7 +441,7 @@ impl InputMethodEngine {
     /// with deduplication. Uses dynamic candidate count based on input token
     /// count for performance.
     ///
-    /// Priority: Learning → User Dictionary → Model → System Dictionary → Fallback
+    /// Priority: Learning → User Dictionary → Special Conversion → Model → System Dictionary → Fallback
     ///
     /// `skip_learning` suppresses the learning-cache step (1). Used by the Tab
     /// key path so users can escape a noisy learning history without losing
@@ -453,10 +452,7 @@ impl InputMethodEngine {
         num_candidates: usize,
         skip_learning: bool,
     ) -> Vec<AnnotatedCandidate> {
-        // Try to initialize the kanji converter, but don't bail out if it
-        // fails — symbol-only inputs (e.g. `。。。`) don't need the model and
-        // we still want to produce dictionary, rewriter, and fallback candidates.
-        // run_kana_kanji_conversion handles the converter-missing case.
+        let special_variants = self.converters.special_rewriter.rewrite(reading);
         if self.converters.kanji.is_none()
             && let Err(e) = self.init_kanji_converter()
         {
@@ -469,7 +465,7 @@ impl InputMethodEngine {
         let hiragana = reading.to_string();
         let katakana = karukan_engine::hiragana_to_katakana(reading);
 
-        // Priority: Learning → User Dictionary → Model → System Dictionary → Fallback
+        // Priority: Learning → User Dictionary → Special Conversion → Model → System Dictionary → Fallback
         let mut builder = CandidateBuilder::new();
 
         // 1. Learning cache candidates (highest priority).
@@ -493,6 +489,17 @@ impl InputMethodEngine {
             if ac.source == CandidateSource::UserDictionary {
                 builder.push(ac.clone());
             }
+        }
+
+        // Explicit conversions such as dates, calculations and Unicode are
+        // direct responses to the typed input. Keep them on the first page,
+        // after the user's own learned/dictionary choices but before model
+        // and system-dictionary noise.
+        for (variant, description) in special_variants {
+            builder.push(
+                AnnotatedCandidate::new(variant, CandidateSource::SpecialConversion)
+                    .with_description(description),
+            );
         }
 
         // 3. Model inference results
@@ -1118,7 +1125,7 @@ impl InputMethodEngine {
         let reading = candidates
             .selected()
             .and_then(|c| c.reading.as_deref())
-            .unwrap_or("");
+            .unwrap_or(&self.input_buf.text);
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))

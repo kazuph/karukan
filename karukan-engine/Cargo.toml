@@ -34,6 +34,7 @@ hf-hub = "0.4"
 
 # Unicode normalization (NFKC) for models whose tokenizer doesn't support full-width ASCII
 unicode-normalization = "0.1"
+libc = "0.2.182"
 
 # HuggingFace tokenizers for external BPE tokenization (bypasses llama.cpp's built-in tokenizer)
 tokenizers = "0.21"
