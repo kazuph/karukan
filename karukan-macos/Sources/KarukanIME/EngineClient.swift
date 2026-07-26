@@ -66,6 +66,16 @@ class EngineClient {
         sendRequest(method: "save_learning", params: [:]) { _ in }
     }
 
+    /// Drop the engine back to the Empty state.
+    ///
+    /// Queued on the same pipe as everything else, so it lands *after* any
+    /// request we gave up waiting for: the engine finishes that key, then
+    /// resets. That ordering is what makes this a usable recovery from a lost
+    /// response — see `KarukanInputController.resyncAfterLostResponse`.
+    func resetAsync() {
+        sendRequest(method: "reset", params: [:]) { _ in }
+    }
+
     func setSurroundingTextAsync(text: String, cursorPos: Int) {
         sendRequest(
             method: "set_surrounding_text",

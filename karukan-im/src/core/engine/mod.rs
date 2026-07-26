@@ -550,10 +550,10 @@ impl InputMethodEngine {
                 let reading = candidates.selected().and_then(|c| c.reading.clone());
                 let selected_text = candidates.selected_text().map(str::to_string);
                 // Record conversion result in learning cache
-                if let Some(reading) = &reading {
-                    if let Some(selected_text) = &selected_text {
-                        self.record_learning(reading, selected_text);
-                    }
+                if let Some(reading) = &reading
+                    && let Some(selected_text) = &selected_text
+                {
+                    self.record_learning(reading, selected_text);
                 }
                 self.input_buf.clear();
                 self.conversion_history.clear();

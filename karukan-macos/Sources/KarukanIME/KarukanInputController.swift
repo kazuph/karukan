@@ -63,11 +63,35 @@ class KarukanInputController: IMKInputController {
 
         guard let result = engineClient.processKeySync(key) else {
             // Engine busy or dead: let the key pass through rather than
-            // freezing input.
+            // freezing input — but the engine may still be about to finish
+            // this key, so put both sides back in a known state first.
+            resyncAfterLostResponse(client: client)
             return false
         }
         apply(actions: result.actions, client: client)
         return result.consumed
+    }
+
+    /// Recover from a `process_key` we stopped waiting for.
+    ///
+    /// The request is still queued in the engine: it will finish the key and
+    /// advance its state (Composing → Conversion, say) while we render none of
+    /// the actions it emitted, because the pending entry is gone by the time
+    /// the response arrives. Left alone the two sides stay disagreeing for the
+    /// rest of the session — the panel shows nothing while the engine believes
+    /// it is mid-conversion, so every later key is interpreted against a state
+    /// the user can't see. That is the "IME stops responding" failure, and it
+    /// does not heal on its own.
+    ///
+    /// So drop everything to Empty on both sides. The in-flight composition is
+    /// lost either way (its actions were never rendered); this at least leaves
+    /// the IME usable for the next word.
+    private func resyncAfterLostResponse(client: any IMKTextInput) {
+        NSLog("KarukanIME: lost engine response, resetting to resync")
+        engineClient.resetAsync()
+        hasPreedit = false
+        setMarkedText(text: "", caret: 0, attributes: [], client: client)
+        Self.candidateWindow.hide()
     }
 
     // MARK: - Lifecycle
