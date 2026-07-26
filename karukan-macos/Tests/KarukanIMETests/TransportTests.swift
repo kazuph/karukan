@@ -73,6 +73,34 @@ final class TransportTests: XCTestCase {
         }
     }
 
+    /// Read the engine's own view of its state.
+    private func engineState() throws -> String {
+        let data = client.sendRequestSync(method: "status", params: [:], timeout: 5.0)
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: XCTUnwrap(data)) as? [String: Any])
+        return try XCTUnwrap(json["state"] as? String)
+    }
+
+    /// A request we stop waiting for still runs in the engine, so its late
+    /// response arrives with no pending entry and is dropped. The controller's
+    /// recovery relies on two things this pins down: the transport survives the
+    /// abandoned request, and the `reset` queued afterwards lands and puts the
+    /// engine back in Empty — matching the preedit the controller clears.
+    ///
+    /// Without it the engine keeps a composition the user can no longer see.
+    func testResetResyncsAfterAbandonedRequest() throws {
+        let a = EngineKeyEvent(keysym: 0x0061, modifiers: KeyModifiers())  // 'a' → あ
+        _ = client.processKeySync(a)
+        XCTAssertEqual(try engineState(), "composing")
+
+        // Abandon a response exactly as processKeySync does on timeout.
+        XCTAssertNil(client.sendRequestSync(method: "status", params: [:], timeout: 0.0))
+
+        client.resetAsync()
+        // One pipe, so this synchronous call is answered after the reset.
+        XCTAssertEqual(try engineState(), "empty")
+    }
+
     func testServerStopAndRestartRecovers() throws {
         // restart() waits for the old process off the main thread and
         // completes via onRestart on the main queue; wait(for:) pumps the
