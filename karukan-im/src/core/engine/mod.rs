@@ -5,6 +5,7 @@
 
 mod chunk;
 mod conversion;
+mod conversion_cache;
 mod cursor;
 mod display;
 mod init;
@@ -16,6 +17,7 @@ mod types;
 
 pub use types::*;
 
+use conversion_cache::ConversionResultCache;
 use input_buffer::InputBuffer;
 
 #[cfg(test)]
@@ -168,6 +170,8 @@ pub struct InputMethodEngine {
     composing_candidates: Option<CandidateList>,
     /// Segments already accepted while moving through a multi-part conversion.
     conversion_history: Vec<ConversionSegment>,
+    /// Completed model results reused across explicit conversion operations.
+    conversion_result_cache: ConversionResultCache,
 }
 
 impl InputMethodEngine {
@@ -194,6 +198,7 @@ impl InputMethodEngine {
             learning: None,
             composing_candidates: None,
             conversion_history: Vec::new(),
+            conversion_result_cache: ConversionResultCache::default(),
         }
     }
 

@@ -1,4 +1,152 @@
 use super::*;
+use crate::core::engine::conversion_cache::ConversionResultKey;
+use karukan_engine::LearningCache;
+
+#[test]
+fn space_after_escape_reuses_nine_candidate_model_result() {
+    let mut config = EngineConfig::default();
+    config.num_candidates = 9;
+    let mut engine = InputMethodEngine::with_config(config);
+    let key = ConversionResultKey {
+        reading: "あい".to_string(),
+        left_context: String::new(),
+        num_candidates: 9,
+    };
+    engine.conversion_result_cache.insert(
+        key,
+        vec!["P1_CACHE_SENTINEL".to_string()],
+        ConversionStrategy::MainModelOnly,
+        "cached-main".to_string(),
+    );
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert!(
+        engine
+            .candidates()
+            .unwrap()
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.text == "P1_CACHE_SENTINEL")
+    );
+
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    engine.metrics.conversion_ms = 99;
+    engine.metrics.model_name = "stale-model".to_string();
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    assert!(
+        engine
+            .candidates()
+            .unwrap()
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.text == "P1_CACHE_SENTINEL")
+    );
+    assert_eq!(engine.metrics.conversion_ms, 0);
+    assert_eq!(engine.metrics.model_name, "cached-main");
+}
+
+#[test]
+fn cache_hit_rebuilds_learning_candidates_in_current_priority_order() {
+    let mut engine = InputMethodEngine::new();
+    let key = ConversionResultKey {
+        reading: "あい".to_string(),
+        left_context: String::new(),
+        num_candidates: 9,
+    };
+    engine.conversion_result_cache.insert(
+        key,
+        vec!["モデル候補".to_string()],
+        ConversionStrategy::MainModelOnly,
+        "cached-main".to_string(),
+    );
+    engine.learning = Some(LearningCache::new(100));
+
+    let before = engine.build_conversion_candidates("あい", 9, false);
+    assert!(
+        before
+            .iter()
+            .any(|candidate| candidate.text == "モデル候補")
+    );
+    assert!(!before.iter().any(|candidate| candidate.text == "学習候補"));
+
+    engine.learning.as_mut().unwrap().record("あい", "学習候補");
+    let after = engine.build_conversion_candidates("あい", 9, false);
+
+    assert_eq!(
+        after.first().map(|candidate| candidate.text.as_str()),
+        Some("学習候補")
+    );
+    assert!(after.iter().any(|candidate| candidate.text == "モデル候補"));
+}
+
+#[test]
+fn cache_hit_restores_model_name_and_preserves_adaptive_flag() {
+    let mut engine = InputMethodEngine::new();
+    let key = ConversionResultKey {
+        reading: "あい".to_string(),
+        left_context: String::new(),
+        num_candidates: 9,
+    };
+    engine.conversion_result_cache.insert(
+        key,
+        vec!["愛".to_string()],
+        ConversionStrategy::MainModelOnly,
+        "cached-main".to_string(),
+    );
+    engine.metrics.adaptive_use_light_model = true;
+    engine.metrics.conversion_ms = 99;
+    engine.metrics.model_name = "stale-model".to_string();
+
+    let candidates = engine.run_kana_kanji_conversion("あい", "", 9);
+
+    assert_eq!(candidates, vec!["愛"]);
+    assert_eq!(engine.metrics.conversion_ms, 0);
+    assert_eq!(engine.metrics.model_name, "cached-main");
+    assert!(engine.metrics.adaptive_use_light_model);
+}
+
+#[test]
+fn single_candidate_conversion_does_not_read_explicit_conversion_cache() {
+    let mut engine = InputMethodEngine::new();
+    let key = ConversionResultKey {
+        reading: "あい".to_string(),
+        left_context: String::new(),
+        num_candidates: 1,
+    };
+    engine.conversion_result_cache.insert(
+        key,
+        vec!["cached-live-result".to_string()],
+        ConversionStrategy::MainModelOnly,
+        "cached-main".to_string(),
+    );
+
+    let candidates = engine.run_kana_kanji_conversion("あい", "", 1);
+
+    assert!(candidates.is_empty());
+}
+
+#[test]
+fn unavailable_model_does_not_create_completed_conversion_cache_entry() {
+    let mut engine = InputMethodEngine::new();
+    let key = ConversionResultKey {
+        reading: "あい".to_string(),
+        left_context: String::new(),
+        num_candidates: 9,
+    };
+
+    let candidates = engine.run_kana_kanji_conversion("あい", "", 9);
+
+    assert!(candidates.is_empty());
+    assert_eq!(
+        engine
+            .conversion_result_cache
+            .get(&key, &ConversionStrategy::MainModelOnly),
+        None
+    );
+}
 
 #[test]
 fn test_conversion_char_commits_and_continues() {
