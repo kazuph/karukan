@@ -13,6 +13,8 @@ mod input;
 mod input_buffer;
 mod mode;
 mod strategy;
+#[cfg(feature = "inference-thread-budget-bench")]
+pub mod thread_budget_bench;
 mod types;
 
 pub use types::*;
@@ -172,6 +174,8 @@ pub struct InputMethodEngine {
     conversion_history: Vec<ConversionSegment>,
     /// Completed model results reused across explicit conversion operations.
     conversion_result_cache: ConversionResultCache,
+    /// Runtime-only thread counts for ParallelBeam's concurrent model calls.
+    parallel_beam_thread_budget: Option<ParallelBeamThreadBudget>,
 }
 
 impl InputMethodEngine {
@@ -199,6 +203,7 @@ impl InputMethodEngine {
             composing_candidates: None,
             conversion_history: Vec::new(),
             conversion_result_cache: ConversionResultCache::default(),
+            parallel_beam_thread_budget: None,
         }
     }
 
@@ -221,6 +226,11 @@ impl InputMethodEngine {
     /// Get last process_key time in milliseconds (input to result, end-to-end)
     pub fn last_process_key_ms(&self) -> u64 {
         self.metrics.process_key_ms
+    }
+
+    /// Set or clear the per-call thread counts used only by ParallelBeam.
+    pub fn set_parallel_beam_thread_budget(&mut self, budget: Option<ParallelBeamThreadBudget>) {
+        self.parallel_beam_thread_budget = budget;
     }
 
     /// Get the model name being used
@@ -501,6 +511,10 @@ impl InputMethodEngine {
         let start = std::time::Instant::now();
         // conversion_ms reports this key only: 0 unless a conversion runs below
         self.metrics.conversion_ms = 0;
+        self.metrics.main_inference_ms = 0;
+        self.metrics.light_inference_ms = 0;
+        self.metrics.prefill_ms = 0;
+        self.metrics.decode_ms = 0;
 
         let shift_active = key.modifiers.shift_key;
 

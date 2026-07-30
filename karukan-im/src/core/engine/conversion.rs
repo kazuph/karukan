@@ -154,23 +154,58 @@ impl InputMethodEngine {
                     return vec![];
                 };
                 let bw = *beam_width;
+                let thread_budget = self.parallel_beam_thread_budget;
                 let (default_top1, light_candidates) = std::thread::scope(|s| {
-                    let h_default = s.spawn(|| converter.convert(&katakana, api_context, 1));
-                    let h_beam = s.spawn(|| light_converter.convert(&katakana, api_context, bw));
+                    let h_default = s.spawn(|| {
+                        let started = Instant::now();
+                        let result = match thread_budget {
+                            Some(budget) => converter.convert_with_n_threads_and_timing(
+                                &katakana,
+                                api_context,
+                                1,
+                                budget.main_threads(),
+                            ),
+                            None => converter
+                                .convert(&katakana, api_context, 1)
+                                .map(|candidates| (candidates, Default::default())),
+                        };
+                        (result, started.elapsed().as_millis() as u64)
+                    });
+                    let h_beam = s.spawn(|| {
+                        let started = Instant::now();
+                        let result = match thread_budget {
+                            Some(budget) => light_converter.convert_with_n_threads_and_timing(
+                                &katakana,
+                                api_context,
+                                bw,
+                                budget.light_threads(),
+                            ),
+                            None => light_converter
+                                .convert(&katakana, api_context, bw)
+                                .map(|candidates| (candidates, Default::default())),
+                        };
+                        (result, started.elapsed().as_millis() as u64)
+                    });
                     (h_default.join(), h_beam.join())
                 });
-                let completed =
-                    matches!(&default_top1, Ok(Ok(_))) && matches!(&light_candidates, Ok(Ok(_)));
+                let (default_top1, main_ms, main_timing, main_completed) = match default_top1 {
+                    Ok((Ok((candidates, timing)), wall_ms)) => (candidates, wall_ms, timing, true),
+                    _ => (Vec::new(), 0, Default::default(), false),
+                };
+                let (light_candidates, light_ms, light_timing, light_completed) =
+                    match light_candidates {
+                        Ok((Ok((candidates, timing)), wall_ms)) => {
+                            (candidates, wall_ms, timing, true)
+                        }
+                        _ => (Vec::new(), 0, Default::default(), false),
+                    };
+                self.metrics.main_inference_ms = main_ms;
+                self.metrics.light_inference_ms = light_ms;
+                self.metrics.prefill_ms = main_timing.prefill_ms.max(light_timing.prefill_ms);
+                self.metrics.decode_ms = main_timing.decode_ms.max(light_timing.decode_ms);
                 (
-                    Self::merge_candidates_dedup(
-                        default_top1.ok().and_then(Result::ok).unwrap_or_default(),
-                        light_candidates
-                            .ok()
-                            .and_then(Result::ok)
-                            .unwrap_or_default(),
-                        bw,
-                    ),
-                    completed,
+                    Self::merge_candidates_dedup(default_top1, light_candidates, bw),
+                    main_completed && light_completed,
                 )
             }
             ConversionStrategy::LightModelOnly => {
@@ -1100,6 +1135,10 @@ impl InputMethodEngine {
     pub fn select_candidate_on_page(&mut self, page_index: usize) -> EngineResult {
         let start = std::time::Instant::now();
         self.metrics.conversion_ms = 0;
+        self.metrics.main_inference_ms = 0;
+        self.metrics.light_inference_ms = 0;
+        self.metrics.prefill_ms = 0;
+        self.metrics.decode_ms = 0;
         let result = match &self.state {
             InputState::Conversion { .. } => self.select_candidate_by_digit(page_index + 1),
             InputState::Composing { .. } => self.select_candidate_from_composing(page_index),

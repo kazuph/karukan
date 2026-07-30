@@ -19,6 +19,11 @@ path = "src/lib.rs"
 name = "karukan-imserver"
 path = "src/bin/karukan-imserver.rs"
 
+[[bin]]
+name = "inference-thread-budget-bench"
+path = "src/bin/inference-thread-budget-bench.rs"
+required-features = ["inference-thread-budget-bench"]
+
 [dependencies]
 # Core engine
 karukan-engine.workspace = true
@@ -42,3 +47,4 @@ tempfile.workspace = true
 
 [features]
 default = []
+inference-thread-budget-bench = []

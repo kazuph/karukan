@@ -17,6 +17,7 @@ use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 /// Global llama.cpp backend (can only be initialized once)
 static LLAMA_BACKEND: OnceLock<std::result::Result<LlamaBackend, String>> = OnceLock::new();
@@ -57,6 +58,16 @@ fn load_tokenizer<P: AsRef<Path>>(path: P) -> Result<tokenizers::Tokenizer> {
 struct BeamState {
     tokens: Vec<LlamaToken>,
     score: f32,
+}
+
+/// Generated token sequence paired with its cumulative beam score.
+pub type ScoredTokenSequence = (Vec<LlamaToken>, f32);
+
+/// Timings for one llama.cpp generation call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InferenceTiming {
+    pub prefill_ms: u64,
+    pub decode_ms: u64,
 }
 
 /// llama.cpp based GPT-2 model for GGUF inference
@@ -172,13 +183,22 @@ impl LlamaCppModel {
     /// cache size. Beam search needs more cells than a greedy run: every beam
     /// keeps its own generated tokens alongside the shared prompt.
     fn context_params_with_n_ctx(&self, n_ctx: u32) -> LlamaContextParams {
+        self.context_params_with_n_ctx_and_threads(n_ctx, self.n_threads)
+    }
+
+    /// Build LlamaContextParams for one inference call.
+    fn context_params_with_n_ctx_and_threads(
+        &self,
+        n_ctx: u32,
+        n_threads: u32,
+    ) -> LlamaContextParams {
         let params = LlamaContextParams::default().with_n_ctx(Some(
             NonZeroU32::new(n_ctx.max(1)).expect("n_ctx must be non-zero"),
         ));
-        if self.n_threads > 0 {
+        if n_threads > 0 {
             params
-                .with_n_threads(self.n_threads as i32)
-                .with_n_threads_batch(self.n_threads as i32)
+                .with_n_threads(n_threads as i32)
+                .with_n_threads_batch(n_threads as i32)
         } else {
             params
         }
@@ -247,6 +267,43 @@ impl LlamaCppModel {
             max_new_tokens,
             eos_token_id,
             LlamaSampler::greedy(),
+            None,
+        )
+        .map(|(tokens, _)| tokens)
+    }
+
+    /// Generate greedily with a thread count that applies only to this call.
+    pub fn generate_with_n_threads(
+        &self,
+        input_tokens: &[LlamaToken],
+        max_new_tokens: usize,
+        eos_token_id: Option<i32>,
+        n_threads: u32,
+    ) -> Result<Vec<LlamaToken>> {
+        self.generate_with_sampler(
+            input_tokens,
+            max_new_tokens,
+            eos_token_id,
+            LlamaSampler::greedy(),
+            Some(n_threads),
+        )
+        .map(|(tokens, _)| tokens)
+    }
+
+    /// Generate greedily with per-call threads and inference timing.
+    pub fn generate_with_n_threads_and_timing(
+        &self,
+        input_tokens: &[LlamaToken],
+        max_new_tokens: usize,
+        eos_token_id: Option<i32>,
+        n_threads: u32,
+    ) -> Result<(Vec<LlamaToken>, InferenceTiming)> {
+        self.generate_with_sampler(
+            input_tokens,
+            max_new_tokens,
+            eos_token_id,
+            LlamaSampler::greedy(),
+            Some(n_threads),
         )
     }
 
@@ -269,7 +326,46 @@ impl LlamaCppModel {
         eos_token_id: Option<i32>,
         beam_size: usize,
     ) -> Result<Vec<(Vec<LlamaToken>, f32)>> {
-        self.generate_beam_search_impl(input_tokens, max_new_tokens, eos_token_id, beam_size)
+        self.generate_beam_search_impl(input_tokens, max_new_tokens, eos_token_id, beam_size, None)
+            .map(|(candidates, _)| candidates)
+    }
+
+    /// Generate beam-search candidates with a thread count that applies only
+    /// to this call.
+    pub fn generate_beam_search_with_n_threads(
+        &self,
+        input_tokens: &[LlamaToken],
+        max_new_tokens: usize,
+        eos_token_id: Option<i32>,
+        beam_size: usize,
+        n_threads: u32,
+    ) -> Result<Vec<(Vec<LlamaToken>, f32)>> {
+        self.generate_beam_search_impl(
+            input_tokens,
+            max_new_tokens,
+            eos_token_id,
+            beam_size,
+            Some(n_threads),
+        )
+        .map(|(candidates, _)| candidates)
+    }
+
+    /// Generate beam-search candidates with per-call threads and timing.
+    pub fn generate_beam_search_with_n_threads_and_timing(
+        &self,
+        input_tokens: &[LlamaToken],
+        max_new_tokens: usize,
+        eos_token_id: Option<i32>,
+        beam_size: usize,
+        n_threads: u32,
+    ) -> Result<(Vec<ScoredTokenSequence>, InferenceTiming)> {
+        self.generate_beam_search_impl(
+            input_tokens,
+            max_new_tokens,
+            eos_token_id,
+            beam_size,
+            Some(n_threads),
+        )
     }
 
     /// Generate multiple candidates using depth-1 beam selection followed by greedy decoding
@@ -478,9 +574,10 @@ impl LlamaCppModel {
         max_new_tokens: usize,
         eos_token_id: Option<i32>,
         beam_size: usize,
-    ) -> Result<Vec<(Vec<LlamaToken>, f32)>> {
+        n_threads: Option<u32>,
+    ) -> Result<(Vec<ScoredTokenSequence>, InferenceTiming)> {
         if beam_size == 0 || input_tokens.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), InferenceTiming::default()));
         }
 
         let backend = get_backend()?;
@@ -499,7 +596,10 @@ impl LlamaCppModel {
         let batch_cap = input_len.max(beam_size) + 8;
 
         let ctx_params = self
-            .context_params_with_n_ctx(n_cells as u32)
+            .context_params_with_n_ctx_and_threads(
+                n_cells as u32,
+                n_threads.unwrap_or(self.n_threads),
+            )
             .with_n_seq_max(n_seq.try_into().unwrap_or(u32::MAX))
             .with_n_batch(batch_cap as u32)
             .with_n_ubatch(batch_cap as u32);
@@ -517,8 +617,11 @@ impl LlamaCppModel {
                 .add(*token, i as i32, &[0], is_last)
                 .map_err(|e| KanjiError::Inference(e.into()))?;
         }
+        let prefill_start = Instant::now();
         ctx.decode(&mut batch)
             .map_err(|e| KanjiError::Inference(e.into()))?;
+        let prefill_ms = prefill_start.elapsed().as_millis() as u64;
+        let decode_start = Instant::now();
 
         let (top_tokens, top_log_probs) = self.get_top_k_tokens(ctx.get_logits(), beam_size);
 
@@ -663,7 +766,13 @@ impl LlamaCppModel {
         all_results.sort_by(|a, b| b.1.total_cmp(&a.1));
         all_results.truncate(beam_size);
 
-        Ok(all_results)
+        Ok((
+            all_results,
+            InferenceTiming {
+                prefill_ms,
+                decode_ms: decode_start.elapsed().as_millis() as u64,
+            },
+        ))
     }
 
     /// Reference beam search: a fresh context and a full re-prefill per beam per
@@ -847,7 +956,8 @@ impl LlamaCppModel {
         max_new_tokens: usize,
         eos_token_id: Option<i32>,
         mut sampler: LlamaSampler,
-    ) -> Result<Vec<LlamaToken>> {
+        n_threads: Option<u32>,
+    ) -> Result<(Vec<LlamaToken>, InferenceTiming)> {
         let backend = get_backend()?;
         // Size the batch to the prompt instead of inheriting llama.cpp's
         // defaults (n_batch 2048 / n_ubatch 512). The compute buffers are
@@ -857,7 +967,7 @@ impl LlamaCppModel {
         // zero) an order of magnitude more scratch memory than it uses.
         let batch_cap = input_tokens.len().max(1) + 8;
         let ctx_params = self
-            .context_params()
+            .context_params_with_n_ctx_and_threads(self.n_ctx, n_threads.unwrap_or(self.n_threads))
             .with_n_batch(batch_cap as u32)
             .with_n_ubatch(batch_cap as u32);
 
@@ -877,8 +987,11 @@ impl LlamaCppModel {
                 .map_err(|e| KanjiError::Inference(e.into()))?;
         }
 
+        let prefill_start = Instant::now();
         ctx.decode(&mut batch)
             .map_err(|e| KanjiError::Inference(e.into()))?;
+        let prefill_ms = prefill_start.elapsed().as_millis() as u64;
+        let decode_start = Instant::now();
 
         // Get model's EOS token for comparison
         let model_eos = self.model.token_eos();
@@ -914,7 +1027,13 @@ impl LlamaCppModel {
                 .map_err(|e| KanjiError::Inference(e.into()))?;
         }
 
-        Ok(generated)
+        Ok((
+            generated,
+            InferenceTiming {
+                prefill_ms,
+                decode_ms: decode_start.elapsed().as_millis() as u64,
+            },
+        ))
     }
 
     /// Get the EOS token ID from the model

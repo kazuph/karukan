@@ -10,6 +10,8 @@ use crate::config::settings::StrategyMode;
 
 use super::*;
 
+const PARALLEL_BEAM_MODEL_COUNT: u32 = 2;
+
 /// Create a KanaKanjiConverter from a variant id, optionally setting thread count.
 fn create_converter(variant_id: &str, n_threads: u32) -> Result<KanaKanjiConverter> {
     let backend = karukan_engine::Backend::from_variant_id(variant_id)?;
@@ -29,6 +31,24 @@ fn threads_label(n_threads: u32) -> String {
     }
 }
 
+fn adaptive_parallel_beam_thread_budget(
+    n_threads: u32,
+    performance_core_count: Option<u32>,
+) -> Option<ParallelBeamThreadBudget> {
+    let performance_core_count = performance_core_count.filter(|count| *count > 0)?;
+    let requested_total = if n_threads == 0 {
+        performance_core_count
+    } else {
+        n_threads.saturating_mul(PARALLEL_BEAM_MODEL_COUNT)
+    };
+    let total = requested_total.min(performance_core_count);
+    if total < PARALLEL_BEAM_MODEL_COUNT {
+        return None;
+    }
+    let light_threads = total / PARALLEL_BEAM_MODEL_COUNT;
+    ParallelBeamThreadBudget::new(total - light_threads, light_threads)
+}
+
 impl InputMethodEngine {
     const USER_DICT_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -41,6 +61,7 @@ impl InputMethodEngine {
     /// failure is non-fatal (beam search is simply unavailable).
     pub fn init_from_settings(&mut self, settings: &Settings) -> Result<()> {
         let strategy = settings.conversion.strategy;
+        self.set_parallel_beam_thread_budget(None);
         tracing::info!(
             "Karukan init: model={:?}, light_model={:?}, strategy={:?}",
             settings.conversion.model,
@@ -96,6 +117,17 @@ impl InputMethodEngine {
                     );
                 } else {
                     tracing::info!("Beam model loaded");
+                    if let Some(budget) = adaptive_parallel_beam_thread_budget(
+                        n_threads,
+                        karukan_engine::performance_core_count(),
+                    ) {
+                        tracing::info!(
+                            "ParallelBeam thread budget: main={}, light={}",
+                            budget.main_threads(),
+                            budget.light_threads()
+                        );
+                        self.set_parallel_beam_thread_budget(Some(budget));
+                    }
                 }
             }
         }
@@ -338,5 +370,110 @@ impl InputMethodEngine {
         } else if has_loaded_files {
             debug!("No user dictionaries could be loaded from {:?}", dir);
         }
+    }
+}
+
+#[cfg(test)]
+mod thread_budget_tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_budget_caps_concurrent_models_to_performance_cores() {
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(4, Some(4)),
+            ParallelBeamThreadBudget::new(2, 2)
+        );
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(4, Some(5)),
+            ParallelBeamThreadBudget::new(3, 2)
+        );
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(4, Some(6)),
+            ParallelBeamThreadBudget::new(3, 3)
+        );
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(4, Some(8)),
+            ParallelBeamThreadBudget::new(4, 4)
+        );
+    }
+
+    #[test]
+    fn adaptive_budget_preserves_small_or_automatic_thread_settings() {
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(1, Some(4)),
+            ParallelBeamThreadBudget::new(1, 1)
+        );
+        assert_eq!(
+            adaptive_parallel_beam_thread_budget(0, Some(4)),
+            ParallelBeamThreadBudget::new(2, 2)
+        );
+        assert_eq!(adaptive_parallel_beam_thread_budget(4, None), None);
+        assert_eq!(adaptive_parallel_beam_thread_budget(4, Some(1)), None);
+    }
+
+    #[test]
+    fn thread_budget_rejects_zero_and_values_outside_llama_cpp_range() {
+        assert_eq!(ParallelBeamThreadBudget::new(0, 1), None);
+        assert_eq!(ParallelBeamThreadBudget::new(1, 0), None);
+        assert_eq!(ParallelBeamThreadBudget::new(i32::MAX as u32 + 1, 1), None);
+        assert_eq!(ParallelBeamThreadBudget::new(1, i32::MAX as u32 + 1), None);
+    }
+
+    #[test]
+    fn init_from_settings_applies_and_clears_adaptive_budget_with_real_models() {
+        let adaptive_settings = Settings::default();
+        let expected_budget = adaptive_parallel_beam_thread_budget(
+            adaptive_settings.conversion.n_threads,
+            karukan_engine::performance_core_count(),
+        );
+        let mut engine =
+            InputMethodEngine::with_config(EngineConfig::from_settings(&adaptive_settings));
+
+        engine
+            .init_from_settings(&adaptive_settings)
+            .expect("Adaptive settings must initialize the real models");
+        assert_eq!(engine.parallel_beam_thread_budget, expected_budget);
+
+        let mut main_settings = adaptive_settings.clone();
+        main_settings.conversion.strategy = StrategyMode::Main;
+        engine
+            .init_from_settings(&main_settings)
+            .expect("Main settings must reinitialize");
+        assert_eq!(engine.parallel_beam_thread_budget, None);
+
+        let mut light_settings = adaptive_settings.clone();
+        light_settings.conversion.strategy = StrategyMode::Light;
+        engine
+            .init_from_settings(&light_settings)
+            .expect("Light settings must reinitialize");
+        assert_eq!(engine.parallel_beam_thread_budget, None);
+
+        engine
+            .init_from_settings(&adaptive_settings)
+            .expect("Adaptive settings must restore the budget");
+        assert_eq!(engine.parallel_beam_thread_budget, expected_budget);
+    }
+
+    #[test]
+    fn failed_real_model_initialization_leaves_no_thread_budget() {
+        let mut settings = Settings::default();
+        settings.conversion.model = Some("missing-main-model".to_string());
+        let mut engine = InputMethodEngine::with_config(EngineConfig::from_settings(&settings));
+        engine.set_parallel_beam_thread_budget(ParallelBeamThreadBudget::new(2, 2));
+
+        assert!(engine.init_from_settings(&settings).is_err());
+        assert_eq!(engine.parallel_beam_thread_budget, None);
+
+        let mut light_failure_engine =
+            InputMethodEngine::with_config(EngineConfig::from_settings(&Settings::default()));
+        light_failure_engine
+            .init_kanji_converter_with_model("jinen-v1-small-q5", 4)
+            .expect("Main real model must initialize");
+        assert!(
+            light_failure_engine
+                .init_light_kanji_converter("missing-light-model", 4)
+                .is_err()
+        );
+        assert_eq!(light_failure_engine.parallel_beam_thread_budget, None);
     }
 }
