@@ -2,7 +2,7 @@
 
 use super::error::KanjiError;
 use super::hf_download::{get_tokenizer_path, get_variant_path};
-use super::llamacpp::LlamaCppModel;
+use super::llamacpp::{InferenceTiming, LlamaCppModel};
 use super::model_config::{ModelFamily, VariantConfig, registry};
 use super::{CONTEXT_TOKEN, INPUT_START_TOKEN, OUTPUT_START_TOKEN};
 use crate::kana::hiragana_to_katakana;
@@ -115,6 +115,40 @@ impl KanaKanjiConverter {
         context: &str,
         num_candidates: usize,
     ) -> Result<Vec<String>> {
+        self.convert_with_thread_override(reading, context, num_candidates, None)
+            .map(|(candidates, _)| candidates)
+    }
+
+    /// Convert with a thread count that applies only to this call.
+    pub fn convert_with_n_threads(
+        &self,
+        reading: &str,
+        context: &str,
+        num_candidates: usize,
+        n_threads: u32,
+    ) -> Result<Vec<String>> {
+        self.convert_with_thread_override(reading, context, num_candidates, Some(n_threads))
+            .map(|(candidates, _)| candidates)
+    }
+
+    /// Convert with per-call threads and llama.cpp prefill/decode timings.
+    pub fn convert_with_n_threads_and_timing(
+        &self,
+        reading: &str,
+        context: &str,
+        num_candidates: usize,
+        n_threads: u32,
+    ) -> Result<(Vec<String>, InferenceTiming)> {
+        self.convert_with_thread_override(reading, context, num_candidates, Some(n_threads))
+    }
+
+    fn convert_with_thread_override(
+        &self,
+        reading: &str,
+        context: &str,
+        num_candidates: usize,
+        n_threads: Option<u32>,
+    ) -> Result<(Vec<String>, InferenceTiming)> {
         // Convert hiragana to katakana (model expects katakana input)
         let katakana = hiragana_to_katakana(reading);
 
@@ -127,11 +161,21 @@ impl KanaKanjiConverter {
 
         let mut candidates = Vec::with_capacity(num_candidates);
 
-        if num_candidates == 1 {
+        let timing = if num_candidates == 1 {
             // Single candidate: use greedy decoding (faster)
-            let output_tokens = self
-                .model
-                .generate(&tokens, self.config.max_new_tokens, eos)?;
+            let (output_tokens, timing) = match n_threads {
+                Some(n_threads) => self.model.generate_with_n_threads_and_timing(
+                    &tokens,
+                    self.config.max_new_tokens,
+                    eos,
+                    n_threads,
+                )?,
+                None => (
+                    self.model
+                        .generate(&tokens, self.config.max_new_tokens, eos)?,
+                    InferenceTiming::default(),
+                ),
+            };
             let generated = &output_tokens[tokens.len()..];
             let text = self.model.decode(generated, true)?;
             let clean = clean_model_output(&text);
@@ -139,14 +183,27 @@ impl KanaKanjiConverter {
             if !clean.is_empty() {
                 candidates.push(clean);
             }
+            timing
         } else {
             // Multiple candidates: use beam search
-            let results = self.model.generate_beam_search(
-                &tokens,
-                self.config.max_new_tokens,
-                eos,
-                num_candidates,
-            )?;
+            let (results, timing) = match n_threads {
+                Some(n_threads) => self.model.generate_beam_search_with_n_threads_and_timing(
+                    &tokens,
+                    self.config.max_new_tokens,
+                    eos,
+                    num_candidates,
+                    n_threads,
+                )?,
+                None => (
+                    self.model.generate_beam_search(
+                        &tokens,
+                        self.config.max_new_tokens,
+                        eos,
+                        num_candidates,
+                    )?,
+                    InferenceTiming::default(),
+                ),
+            };
 
             for (output_tokens, _score) in results {
                 let text = self.model.decode(&output_tokens, true)?;
@@ -156,14 +213,15 @@ impl KanaKanjiConverter {
                     candidates.push(clean);
                 }
             }
-        }
+            timing
+        };
 
         // If no candidates, return the original reading
         if candidates.is_empty() {
             candidates.push(reading.to_string());
         }
 
-        Ok(candidates)
+        Ok((candidates, timing))
     }
 
     /// Get a human-readable model name for display

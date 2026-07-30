@@ -9,6 +9,8 @@ pub mod config;
 pub mod core;
 pub mod server;
 
-pub use core::engine::{EngineAction, EngineResult, InputMethodEngine};
+pub use core::engine::{
+    EngineAction, EngineConfig, EngineResult, InputMethodEngine, ParallelBeamThreadBudget,
+};
 pub use core::keycode::{KeyEvent, KeyModifiers, Keysym};
 pub use core::state::InputState;

@@ -94,6 +94,38 @@ pub struct EngineConfig {
     pub tab_skips_learning: bool,
 }
 
+/// Per-call llama.cpp thread counts for ParallelBeam's concurrent model calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelBeamThreadBudget {
+    main_threads: u32,
+    light_threads: u32,
+}
+
+impl ParallelBeamThreadBudget {
+    /// Create a budget only when both values are valid positive llama.cpp thread counts.
+    pub const fn new(main_threads: u32, light_threads: u32) -> Option<Self> {
+        if main_threads == 0
+            || light_threads == 0
+            || main_threads > i32::MAX as u32
+            || light_threads > i32::MAX as u32
+        {
+            return None;
+        }
+        Some(Self {
+            main_threads,
+            light_threads,
+        })
+    }
+
+    pub const fn main_threads(self) -> u32 {
+        self.main_threads
+    }
+
+    pub const fn light_threads(self) -> u32 {
+        self.light_threads
+    }
+}
+
 impl EngineConfig {
     /// Build an engine config from user settings (config.toml).
     /// Shared by the fcitx5 FFI and the stdio JSON-RPC server.
@@ -242,6 +274,14 @@ pub(in crate::core) struct ConversionMetrics {
     pub conversion_ms: u64,
     /// Last process_key time in milliseconds (input to result, end-to-end)
     pub process_key_ms: u64,
+    /// ParallelBeam main greedy-call wall time for the current conversion.
+    pub main_inference_ms: u64,
+    /// ParallelBeam light beam-call wall time for the current conversion.
+    pub light_inference_ms: u64,
+    /// ParallelBeam prompt prefill time on the parallel critical path.
+    pub prefill_ms: u64,
+    /// ParallelBeam generated-token decode time on the parallel critical path.
+    pub decode_ms: u64,
     /// Display name of the model used for the last conversion
     pub model_name: String,
     /// Adaptive flag: set when the main model exceeded max_latency_ms
