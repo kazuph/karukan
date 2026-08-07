@@ -76,6 +76,17 @@ fn assert_p1_model_artifacts() {
     assert_eq!(fixture_sha256(&light_path), P1_LIGHT_MODEL_SHA256);
 }
 
+fn engine_in_conversion() -> InputMethodEngine {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.text = "てすと".to_string();
+    engine.input_buf.cursor_pos = "てすと".chars().count();
+    engine.state = InputState::Conversion {
+        preedit: Preedit::new(),
+        candidates: CandidateList::from_strings(["第一候補", "第二候補"]),
+    };
+    engine
+}
+
 fn assert_show_candidates_action_matches_state(result: &EngineResult, engine: &InputMethodEngine) {
     let action_candidates = result
         .actions
@@ -1024,6 +1035,99 @@ fn test_conversion_char_commits_and_continues() {
     // Should now be in Composing with 'k' in preedit
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "k");
+}
+
+#[test]
+fn modified_conversion_keys_pass_through_except_ctrl_n_and_ctrl_p() {
+    let keys = [
+        Keysym::RETURN,
+        Keysym::ESCAPE,
+        Keysym::BACKSPACE,
+        Keysym::LEFT,
+        Keysym::RIGHT,
+        Keysym::SPACE,
+        Keysym::DOWN,
+        Keysym::TAB,
+        Keysym::UP,
+        Keysym::PAGE_DOWN,
+        Keysym::PAGE_UP,
+        Keysym::KEY_1,
+    ];
+
+    for modifiers in [
+        KeyModifiers::new().with_control(true),
+        KeyModifiers {
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+        KeyModifiers {
+            super_key: true,
+            ..KeyModifiers::default()
+        },
+    ] {
+        for keysym in keys {
+            let mut engine = engine_in_conversion();
+            let result = engine.process_key(&KeyEvent::new(keysym, modifiers, true));
+
+            assert!(
+                !result.consumed,
+                "modified conversion key {keysym:?} must pass through"
+            );
+            assert_eq!(engine.candidates().unwrap().cursor(), Some(0));
+        }
+    }
+
+    for modifiers in [
+        KeyModifiers {
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+        KeyModifiers {
+            control_key: true,
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+    ] {
+        for keysym in [Keysym::KEY_N, Keysym::KEY_P] {
+            let mut engine = engine_in_conversion();
+            assert!(
+                !engine
+                    .process_key(&KeyEvent::new(keysym, modifiers, true))
+                    .consumed
+            );
+            assert_eq!(engine.candidates().unwrap().cursor(), Some(0));
+        }
+    }
+
+    let mut engine = engine_in_conversion();
+    assert!(engine.process_key(&press_ctrl(Keysym::KEY_N)).consumed);
+    assert_eq!(engine.candidates().unwrap().cursor(), Some(1));
+    assert!(engine.process_key(&press_ctrl(Keysym::KEY_P)).consumed);
+    assert_eq!(engine.candidates().unwrap().cursor(), Some(0));
+
+    let mut engine = engine_in_conversion();
+    assert!(
+        engine
+            .process_key(&press_ctrl_shift(Keysym::KEY_L))
+            .consumed
+    );
+    assert!(engine.live.enabled);
+    assert_eq!(engine.candidates().unwrap().cursor(), Some(0));
+
+    let mut engine = engine_in_conversion();
+    let result = engine.process_key(&KeyEvent::new(
+        Keysym::KEY_L,
+        KeyModifiers {
+            shift_key: true,
+            control_key: true,
+            alt_key: true,
+            super_key: false,
+        },
+        true,
+    ));
+    assert!(!result.consumed);
+    assert!(!engine.live.enabled);
+    assert_eq!(engine.candidates().unwrap().cursor(), Some(0));
 }
 
 #[test]

@@ -30,12 +30,17 @@ pub fn build_jinen_prompt(katakana: &str, context: &str) -> String {
     )
 }
 
-/// Clean model output by trimming whitespace.
+/// Clean model output by trimming whitespace and rejecting yen-like prefixes.
 ///
 /// Special tokens (BOS/EOS) are handled at the decode level via
 /// `skip_special_tokens` rather than string replacement.
 pub fn clean_model_output(text: &str) -> String {
-    text.trim().to_string()
+    let candidate = text.trim();
+    if candidate.starts_with(['\\', '¥', '￥']) {
+        String::new()
+    } else {
+        candidate.to_string()
+    }
 }
 
 /// Inference backend configuration (llama.cpp GGUF format with external tokenizer)
@@ -240,6 +245,27 @@ impl KanaKanjiConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_model_output_rejects_yen_like_prefixes() {
+        for candidate in [
+            "\\unexpected",
+            "¥unexpected",
+            "￥unexpected",
+            " \t¥unexpected",
+        ] {
+            assert_eq!(
+                clean_model_output(candidate),
+                "",
+                "model candidate `{candidate}` must not enter the candidate stream"
+            );
+        }
+
+        for candidate in ["通常の変換候補", "通常¥候補", "通常\\候補", "通常￥候補"]
+        {
+            assert_eq!(clean_model_output(candidate), candidate);
+        }
+    }
 
     #[test]
 

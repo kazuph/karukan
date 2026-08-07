@@ -887,6 +887,17 @@ impl InputMethodEngine {
 
     /// Process key in conversion state
     pub(super) fn process_key_conversion(&mut self, key: &KeyEvent) -> EngineResult {
+        if key.modifiers.control_key || key.modifiers.alt_key {
+            if key.modifiers.control_key && !key.modifiers.alt_key {
+                match key.keysym {
+                    Keysym::KEY_N | Keysym::KEY_N_UPPER => return self.next_candidate(),
+                    Keysym::KEY_P | Keysym::KEY_P_UPPER => return self.prev_candidate(),
+                    _ => {}
+                }
+            }
+            return EngineResult::not_consumed();
+        }
+
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
@@ -901,15 +912,6 @@ impl InputMethodEngine {
             Keysym::PAGE_UP => self.prev_candidate_page(),
             Keysym::BACKSPACE => self.backspace_conversion(),
             _ => {
-                // Ctrl+N / Ctrl+P: emacs-style candidate navigation
-                if key.modifiers.control_key && !key.modifiers.alt_key {
-                    match key.keysym {
-                        Keysym::KEY_N | Keysym::KEY_N_UPPER => return self.next_candidate(),
-                        Keysym::KEY_P | Keysym::KEY_P_UPPER => return self.prev_candidate(),
-                        _ => {}
-                    }
-                }
-
                 // Check for digit selection (1-9)
                 if let Some(digit) = key.keysym.digit_value() {
                     return self.select_candidate_by_digit(digit);

@@ -118,7 +118,7 @@ impl InputMethodEngine {
     /// Process key in empty state
     pub(super) fn process_key_empty(&mut self, key: &KeyEvent, shift_active: bool) -> EngineResult {
         // Ctrl+Space: start input with full-width space
-        if key.modifiers.control_key && key.keysym == Keysym::SPACE {
+        if key.modifiers.control_key && !key.modifiers.alt_key && key.keysym == Keysym::SPACE {
             self.converters.romaji.reset();
             self.input_buf.clear();
             self.input_buf.insert("\u{3000}");
@@ -252,7 +252,7 @@ impl InputMethodEngine {
         shift_active: bool,
     ) -> EngineResult {
         // Handle Ctrl+key shortcuts
-        if key.modifiers.control_key {
+        if key.modifiers.control_key && !key.modifiers.alt_key {
             match key.keysym {
                 // Ctrl+Space: insert full-width space (U+3000)
                 Keysym::SPACE => return self.input_fullwidth_space(),
@@ -266,8 +266,18 @@ impl InputMethodEngine {
                 Keysym::KEY_E | Keysym::KEY_E_UPPER => return self.move_caret_end(),
                 // Ctrl+F: move right (Emacs-style Right)
                 Keysym::KEY_F | Keysym::KEY_F_UPPER => return self.move_caret_right(),
+                Keysym::KEY_N | Keysym::KEY_N_UPPER if self.composing_candidates.is_some() => {
+                    return self.select_visible_prediction_next();
+                }
+                Keysym::KEY_P | Keysym::KEY_P_UPPER if self.composing_candidates.is_some() => {
+                    return self.select_visible_prediction_prev();
+                }
                 _ => {}
             }
+        }
+
+        if key.modifiers.control_key || key.modifiers.alt_key {
+            return EngineResult::not_consumed();
         }
 
         match key.keysym {
@@ -302,21 +312,6 @@ impl InputMethodEngine {
             Keysym::HOME => self.move_caret_home(),
             Keysym::END => self.move_caret_end(),
             _ => {
-                if self.composing_candidates.is_some()
-                    && key.modifiers.control_key
-                    && !key.modifiers.alt_key
-                {
-                    match key.keysym {
-                        Keysym::KEY_N | Keysym::KEY_N_UPPER => {
-                            return self.select_visible_prediction_next();
-                        }
-                        Keysym::KEY_P | Keysym::KEY_P_UPPER => {
-                            return self.select_visible_prediction_prev();
-                        }
-                        _ => {}
-                    }
-                }
-
                 // Digit selection is limited to kana modes: in Alphabet mode
                 // digits are literal text (`id1234`), and in Emoji mode they
                 // are part of shortcodes (`:+1`, `:100`), so hijacking them

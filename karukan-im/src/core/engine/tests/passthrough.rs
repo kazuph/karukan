@@ -1,6 +1,101 @@
 use super::*;
 
 #[test]
+fn undocumented_modified_composing_keys_pass_through() {
+    let keys = [
+        Keysym::RETURN,
+        Keysym::ESCAPE,
+        Keysym::BACKSPACE,
+        Keysym::DELETE,
+        Keysym::LEFT,
+        Keysym::RIGHT,
+        Keysym::TAB,
+        Keysym::DOWN,
+        Keysym::UP,
+        Keysym::HOME,
+        Keysym::END,
+        Keysym::KEY_1,
+    ];
+
+    for modifiers in [
+        KeyModifiers::new().with_control(true),
+        KeyModifiers {
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+        KeyModifiers {
+            super_key: true,
+            ..KeyModifiers::default()
+        },
+    ] {
+        for keysym in keys {
+            let mut engine = InputMethodEngine::new();
+            engine.process_key(&press('a'));
+
+            let result = engine.process_key(&KeyEvent::new(keysym, modifiers, true));
+
+            assert!(
+                !result.consumed,
+                "modified composing key {keysym:?} must pass through"
+            );
+            assert!(matches!(engine.state(), InputState::Composing { .. }));
+            assert_eq!(engine.preedit().unwrap().text(), "あ");
+        }
+    }
+
+    for modifiers in [
+        KeyModifiers {
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+        KeyModifiers {
+            super_key: true,
+            ..KeyModifiers::default()
+        },
+    ] {
+        let mut engine = InputMethodEngine::new();
+        engine.process_key(&press('a'));
+
+        let result = engine.process_key(&KeyEvent::new(Keysym::SPACE, modifiers, true));
+
+        assert!(!result.consumed);
+        assert!(matches!(engine.state(), InputState::Composing { .. }));
+        assert_eq!(engine.preedit().unwrap().text(), "あ");
+    }
+
+    for keysym in [Keysym::SPACE, Keysym::KEY_N, Keysym::KEY_P] {
+        let mut engine = InputMethodEngine::new();
+        engine.process_key(&press('a'));
+        let modifiers = KeyModifiers {
+            control_key: true,
+            alt_key: true,
+            ..KeyModifiers::default()
+        };
+
+        assert!(
+            !engine
+                .process_key(&KeyEvent::new(keysym, modifiers, true))
+                .consumed
+        );
+        assert!(matches!(engine.state(), InputState::Composing { .. }));
+        assert_eq!(engine.preedit().unwrap().text(), "あ");
+    }
+
+    let mut engine = InputMethodEngine::new();
+    let result = engine.process_key(&KeyEvent::new(
+        Keysym::SPACE,
+        KeyModifiers {
+            control_key: true,
+            alt_key: true,
+            ..KeyModifiers::default()
+        },
+        true,
+    ));
+    assert!(!result.consumed);
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
 fn test_passthrough_no_double_counting() {
     // Regression test: typing '<' twice should produce "<<" in the preedit,
     // not "<<<" or "<<<<". The converter adds PassThrough chars to output()

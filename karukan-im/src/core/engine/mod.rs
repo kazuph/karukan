@@ -490,8 +490,15 @@ impl InputMethodEngine {
             return EngineResult::not_consumed();
         }
 
+        // Super-modified shortcuts belong to the desktop/application. The
+        // dedicated right-Super mode toggle has already been handled above.
+        if key.modifiers.super_key {
+            return EngineResult::not_consumed();
+        }
+
         // Ctrl+Shift+L: toggle live conversion (works in all states)
         if key.modifiers.control_key
+            && !key.modifiers.alt_key
             && key.modifiers.shift_key
             && (key.keysym == Keysym::KEY_L || key.keysym == Keysym::KEY_L_UPPER)
         {
