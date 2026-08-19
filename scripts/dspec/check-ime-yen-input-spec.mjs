@@ -8,6 +8,7 @@ const keyMap = readFileSync(
   "karukan-macos/Sources/KarukanIME/KeyCodeMap.swift",
   "utf8",
 );
+const keycode = readFileSync("karukan-im/src/core/keycode.rs", "utf8");
 const alloy = readFileSync("scripts/dspec/ime-yen-input.als", "utf8");
 const composingInput = input.slice(
   input.indexOf("pub(super) fn process_key_composing"),
@@ -70,7 +71,14 @@ requireAnchor(
   "&& !key.modifiers.alt_key",
   "composing option modifier guard",
 );
-requireAnchor(keyMap, "(0x20...0x7e).contains", "ASCII-only macOS translation");
+requireAnchor(keyMap, "(0x20...0x7e).contains", "ASCII printable macOS translation");
+requireAnchor(keyMap, "scalar.value == 0x00A5", "JIS yen keysym translation");
+requireAnchor(
+  keycode,
+  "pub const YEN: Keysym = Keysym(0x00a5)",
+  "XK_yen keysym constant",
+);
+requireAnchor(keycode, "*self == Self::YEN", "yen treated as printable");
 appearsBefore(
   conversion,
   "if key.modifiers.control_key || key.modifiers.alt_key {",

@@ -90,6 +90,17 @@ final class KeyCodeMapTests: XCTestCase {
         XCTAssertEqual(event?.modifiers.shift, true)
     }
 
+    func testJisYenSignIsTranslated() {
+        // JIS 円キー: both `characters` and `charactersIgnoringModifiers`
+        // are U+00A5. ASCII-only translation returned nil, so IMK replaced
+        // marked text with ¥ while the engine still held てすと.
+        let event = KeyCodeMap.translate(
+            keyCode: 93, characters: "¥", charactersIgnoringModifiers: "¥", flags: [])
+        XCTAssertEqual(event?.keysym, 0x00A5)
+        XCTAssertEqual(event?.modifiers.shift, false)
+        XCTAssertEqual(event?.modifiers.alt, false)
+    }
+
     func testNonAsciiNotTranslated() {
         // Kana input layouts produce non-ASCII characters; unsupported.
         XCTAssertNil(

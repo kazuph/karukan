@@ -87,9 +87,17 @@ enum KeyCodeMap {
             else { return nil }
             return scalar.value
         }
+        // XK_yen / U+00A5: JIS 円キー. Keep kana (あ) untranslated.
+        func yenScalar(of string: String?) -> UInt32? {
+            guard let scalar = string?.unicodeScalars.first, scalar.value == 0x00A5
+            else { return nil }
+            return scalar.value
+        }
         guard
             let keysym = asciiScalar(of: characters)
                 ?? asciiScalar(of: charactersIgnoringModifiers)
+                ?? yenScalar(of: characters)
+                ?? yenScalar(of: charactersIgnoringModifiers)
         else {
             return nil
         }

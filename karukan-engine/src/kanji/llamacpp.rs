@@ -14,6 +14,7 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -40,6 +41,33 @@ fn get_backend() -> Result<&'static LlamaBackend> {
 /// Convert bytes to hex display format for partial UTF-8 sequences
 fn bytes_to_hex_display(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("<{:02X}>", b)).collect()
+}
+
+/// Whether an added-token string is a byte-fallback token like `<0xCE>`.
+///
+/// SentencePiece-derived tokenizer.json files mark the 256 byte-fallback
+/// tokens as `special: true`, but they carry real output bytes (a character
+/// outside the vocab is emitted as its UTF-8 bytes, e.g. `Ψ` as
+/// `<0xCE><0xA8>`), so they must never be skipped as special tokens.
+///
+/// This must classify exactly the tokens the tokenizer's `ByteFallback`
+/// decoder consumes, so the check below is a verbatim mirror of that
+/// decoder's own match
+/// (`tokenizers::decoders::byte_fallback::ByteFallback::decode_chain`).
+fn is_byte_fallback_token(token: &str) -> bool {
+    token.len() == 6
+        && token.starts_with("<0x")
+        && token.ends_with('>')
+        && u8::from_str_radix(&token[3..5], 16).is_ok()
+}
+
+fn special_token_ids(tokenizer: &tokenizers::Tokenizer) -> HashSet<u32> {
+    tokenizer
+        .get_added_tokens_decoder()
+        .into_iter()
+        .filter(|(_, tok)| tok.special && !is_byte_fallback_token(&tok.content))
+        .map(|(id, _)| id)
+        .collect()
 }
 
 /// Load and configure an external HuggingFace tokenizer from a `tokenizer.json` file.
@@ -77,6 +105,10 @@ pub struct LlamaCppModel {
     /// External HuggingFace tokenizer (always required).
     /// `tokenize()` and `decode()` use this instead of llama.cpp's built-in tokenizer.
     external_tokenizer: tokenizers::Tokenizer,
+    /// Token ids `decode(_, skip_special_tokens=true)` removes before
+    /// detokenizing: added tokens with `special: true`, minus the
+    /// byte-fallback tokens (see [`is_byte_fallback_token`]).
+    special_token_ids: HashSet<u32>,
     /// Number of threads for inference (0 = use llama.cpp default)
     n_threads: u32,
 }
@@ -95,12 +127,7 @@ impl LlamaCppModel {
             .map_err(|e| KanjiError::ModelLoad(e.into()))?;
         let external_tokenizer = load_tokenizer(tokenizer_json)?;
 
-        Ok(Self {
-            model,
-            n_ctx: 256,
-            external_tokenizer,
-            n_threads: 0,
-        })
+        Ok(Self::from_loaded_parts(model, external_tokenizer, 256))
     }
 
     /// Load a GGUF model with a pre-tokenizer type override.
@@ -138,12 +165,7 @@ impl LlamaCppModel {
             .map_err(|e| KanjiError::ModelLoad(e.into()))?;
         let external_tokenizer = load_tokenizer(tokenizer_json)?;
 
-        Ok(Self {
-            model,
-            n_ctx: 256,
-            external_tokenizer,
-            n_threads: 0,
-        })
+        Ok(Self::from_loaded_parts(model, external_tokenizer, 256))
     }
 
     /// Load a GGUF model with explicit context window size
@@ -160,12 +182,22 @@ impl LlamaCppModel {
             .map_err(|e| KanjiError::ModelLoad(e.into()))?;
         let external_tokenizer = load_tokenizer(tokenizer_json)?;
 
-        Ok(Self {
+        Ok(Self::from_loaded_parts(model, external_tokenizer, n_ctx))
+    }
+
+    fn from_loaded_parts(
+        model: LlamaModel,
+        external_tokenizer: tokenizers::Tokenizer,
+        n_ctx: u32,
+    ) -> Self {
+        let special_token_ids = special_token_ids(&external_tokenizer);
+        Self {
             model,
             n_ctx,
             external_tokenizer,
+            special_token_ids,
             n_threads: 0,
-        })
+        }
     }
 
     /// Set the number of threads for inference.
@@ -221,12 +253,20 @@ impl LlamaCppModel {
     /// Decode tokens to string using the external tokenizer
     ///
     /// When `skip_special_tokens` is true, special tokens (BOS, EOS, EOG) are
-    /// excluded from the output.
+    /// excluded from the output. The filtering is done here by token id
+    /// rather than delegated to the tokenizer: tokenizer.json marks the
+    /// byte-fallback tokens (`<0xCE>` …) as special, so the tokenizer's own
+    /// `skip_special_tokens` would drop them before its ByteFallback decoder
+    /// can fuse them back into characters (`Ψ` = `<0xCE><0xA8>` would vanish).
     pub fn decode(&self, tokens: &[LlamaToken], skip_special_tokens: bool) -> Result<String> {
-        let ids: Vec<u32> = tokens.iter().map(|t| t.0 as u32).collect();
+        let ids: Vec<u32> = tokens
+            .iter()
+            .map(|t| t.0 as u32)
+            .filter(|id| !(skip_special_tokens && self.special_token_ids.contains(id)))
+            .collect();
         let text = self
             .external_tokenizer
-            .decode(&ids, skip_special_tokens)
+            .decode(&ids, false)
             .map_err(KanjiError::Inference)?;
         Ok(text)
     }
@@ -1231,5 +1271,28 @@ mod beam_search_tests {
                 .expect("empty input must not panic")
                 .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod byte_fallback_token_tests {
+    use super::is_byte_fallback_token;
+
+    #[test]
+    fn byte_fallback_tokens_are_recognized() {
+        assert!(is_byte_fallback_token("<0x00>"));
+        assert!(is_byte_fallback_token("<0xCE>"));
+        assert!(is_byte_fallback_token("<0xff>"));
+    }
+
+    #[test]
+    fn control_tokens_are_not_byte_fallback() {
+        assert!(!is_byte_fallback_token("<s>"));
+        assert!(!is_byte_fallback_token("</s>"));
+        assert!(!is_byte_fallback_token("<unk>"));
+        assert!(!is_byte_fallback_token("<pad>"));
+        assert!(!is_byte_fallback_token("<0xGG>"));
+        assert!(!is_byte_fallback_token("<0x123>"));
+        assert!(!is_byte_fallback_token("0xCE"));
     }
 }

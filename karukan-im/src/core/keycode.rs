@@ -85,10 +85,13 @@ impl Keysym {
     pub const F11: Keysym = Keysym(0xffc8);
     pub const F12: Keysym = Keysym(0xffc9);
 
+    /// XK_yen / U+00A5 YEN SIGN. JIS 円キー sends this Latin-1 keysym.
+    pub const YEN: Keysym = Keysym(0x00a5);
+
     /// Check if this keysym represents a printable character
     pub fn is_printable(&self) -> bool {
-        // ASCII printable range (0x20-0x7e)
-        (0x0020..=0x007e).contains(&self.0)
+        // ASCII printable range (0x20-0x7e), plus XK_yen (U+00A5).
+        (0x0020..=0x007e).contains(&self.0) || *self == Self::YEN
     }
 
     /// Try to convert this keysym to a character
@@ -266,6 +269,7 @@ mod tests {
         assert!(Keysym(0x0061).is_printable()); // 'a'
         assert!(Keysym(0x0041).is_printable()); // 'A'
         assert!(Keysym(0x0020).is_printable()); // space
+        assert!(Keysym::YEN.is_printable()); // XK_yen / U+00A5
         assert!(!Keysym::BACKSPACE.is_printable());
         assert!(!Keysym::RETURN.is_printable());
     }
@@ -274,6 +278,7 @@ mod tests {
     fn test_keysym_to_char() {
         assert_eq!(Keysym(0x0061).to_char(), Some('a'));
         assert_eq!(Keysym(0x0041).to_char(), Some('A'));
+        assert_eq!(Keysym::YEN.to_char(), Some('¥'));
         assert_eq!(Keysym::BACKSPACE.to_char(), None);
     }
 

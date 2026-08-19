@@ -129,6 +129,13 @@ fn explicit_backslash_keeps_yen_rewriter_candidates_without_kanji_model() {
     assert_contains(&texts, "￥");
 }
 
+#[test]
+fn explicit_yen_keeps_yen_rewriter_candidates_without_kanji_model() {
+    let texts = conversion_texts("¥");
+    assert_contains(&texts, "¥");
+    assert_contains(&texts, "￥");
+}
+
 // ---------- rewriter scope (the headline regression) ----------
 
 #[test]

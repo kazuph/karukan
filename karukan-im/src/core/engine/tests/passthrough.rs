@@ -241,3 +241,48 @@ fn test_digit_in_middle_of_hiragana() {
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "あ2");
 }
+
+fn marked_text(result: &EngineResult) -> Option<String> {
+    result.actions.iter().find_map(|action| match action {
+        EngineAction::UpdatePreedit(preedit) => Some(preedit.text().to_string()),
+        _ => None,
+    })
+}
+
+fn committed_text(result: &EngineResult) -> Option<String> {
+    result.actions.iter().find_map(|action| match action {
+        EngineAction::Commit(text) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn yen_during_hiragana_composition_keeps_reading_in_marked_text_and_commit() {
+    // JIS 円キー is XK_yen (U+00A5). If the engine leaves it unconsumed,
+    // macOS IMK passes the original event through and the client replaces
+    // marked text with "¥" while `input_buf` still holds てすと. Enter then
+    // commits てすと after that already-inserted yen, so the document
+    // becomes ¥てすと. The composition display (UpdatePreedit) and the
+    // commit string must stay the same てすと¥.
+    let mut engine = InputMethodEngine::new();
+    for ch in "tesuto".chars() {
+        engine.process_key(&press(ch));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "てすと");
+
+    let yen = engine.process_key(&press('¥'));
+    assert!(
+        yen.consumed,
+        "yen must be consumed so IMK does not replace marked text"
+    );
+    assert_eq!(marked_text(&yen).as_deref(), Some("てすと¥"));
+    assert_eq!(engine.preedit().unwrap().text(), "てすと¥");
+
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(committed_text(&commit).as_deref(), Some("てすと¥"));
+    assert_eq!(
+        committed_text(&commit),
+        marked_text(&yen),
+        "commit text must match the composition display"
+    );
+}
