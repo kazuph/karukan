@@ -399,6 +399,23 @@ fn unchanged_enter_does_not_record_learning() {
 }
 
 #[test]
+fn repeated_live_conversion_enters_do_not_override_explicit_selection() {
+    let mut engine = engine_with_learning(&[("きょう", "今日")]);
+
+    for _ in 0..10 {
+        type_string(&mut engine, "kyou");
+        engine.live.text = "誤変換".to_string();
+        let result = engine.process_key(&press_key(Keysym::RETURN));
+        assert_eq!(committed_text(&result).as_deref(), Some("誤変換"));
+    }
+
+    assert_eq!(
+        engine.learning.as_ref().unwrap().lookup("きょう")[0].0,
+        "今日"
+    );
+}
+
+#[test]
 fn space_conversion_excludes_learning_prefix_predictions() {
     let mut engine = engine_with_learning(&[("よろしくおねがいします", "よろしくお願いします")]);
     type_string(&mut engine, "yoroshiku");

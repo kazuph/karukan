@@ -467,7 +467,7 @@ impl InputMethodEngine {
         // a Slack-style query like `:smile`, not a hiragana reading,
         // so storing it would corrupt the kana-keyed learning cache.
         if self.input_mode != InputMode::Emoji && text != reading {
-            self.record_learning(&reading, &text);
+            self.record_automatic_learning(&reading, &text);
         }
 
         self.converters.romaji.reset();
