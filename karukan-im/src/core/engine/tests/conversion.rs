@@ -219,7 +219,7 @@ fn p1_production_merge_fixture() -> (Vec<String>, Option<usize>, String) {
     let expected_texts = [
         "P1_LEARNING",
         "P1_USER",
-        "Karukan 0.1.0",
+        "Karukan 0.2.0",
         "バージョン",
         "Version",
         "version",
@@ -302,7 +302,7 @@ fn p1_production_merge_fixture() -> (Vec<String>, Option<usize>, String) {
 
     let special_index = texts
         .iter()
-        .position(|text| text == "Karukan 0.1.0")
+        .position(|text| text == "Karukan 0.2.0")
         .expect("fixture must include the deterministic special conversion");
     let model_index = labels
         .iter()

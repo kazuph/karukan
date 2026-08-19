@@ -1308,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "karukan-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1327,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "karukan-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1349,7 +1349,7 @@ dependencies = [
 
 [[package]]
 name = "karukan-fcitx5"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "karukan-im",
  "tracing",
@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "karukan-im"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "directories",
