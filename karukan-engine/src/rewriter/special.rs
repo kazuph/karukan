@@ -1004,7 +1004,7 @@ mod tests {
             );
         }
         assert!(
-            rewrite("ばーじょん", local(2024, 1, 1, 0, 0)).contains(&"Karukan 0.1.0".to_string())
+            rewrite("ばーじょん", local(2024, 1, 1, 0, 0)).contains(&"Karukan 0.2.0".to_string())
         );
         assert!(rewrite("かおもじ", local(2024, 1, 1, 0, 0)).contains(&"＼(^o^)／".to_string()));
         assert!(rewrite("にこにこ", local(2024, 1, 1, 0, 0)).contains(&"＼(^o^)／".to_string()));

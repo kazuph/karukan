@@ -2,7 +2,8 @@
 //!
 //! Records which surface forms the user chose for each reading, and
 //! boosts those candidates on subsequent conversions. Persisted as a
-//! simple TSV file (`reading\tsurface\tfrequency\tlast_access`).
+//! TSV file. Version 2 adds a selection kind and ordering sequence to the
+//! version 1 fields (`reading\tsurface\tfrequency\tlast_access`).
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -14,10 +15,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct LearningEntry {
     /// Surface form (e.g. "今日")
     pub surface: String,
-    /// Number of times this surface was selected
+    /// Number of times this surface was selected or automatically committed.
     pub frequency: u32,
-    /// Last selection time as Unix timestamp (seconds)
+    /// Last selection or automatic commit time as Unix timestamp (seconds).
     pub last_access: u64,
+    /// Whether this candidate was explicitly selected by the user.
+    pub explicit: bool,
+    /// Monotonic order of the most recent explicit selection.
+    pub selection_order: u64,
 }
 
 /// In-memory cache of user learning data.
@@ -28,6 +33,7 @@ pub struct LearningEntry {
 pub struct LearningCache {
     entries: HashMap<String, Vec<LearningEntry>>,
     max_entries: usize,
+    next_selection_order: u64,
     dirty: bool,
 }
 
@@ -40,6 +46,7 @@ impl LearningCache {
         Self {
             entries: HashMap::new(),
             max_entries,
+            next_selection_order: 1,
             dirty: false,
         }
     }
@@ -47,49 +54,81 @@ impl LearningCache {
     /// Record a user selection. Increments frequency and updates last_access.
     pub fn record(&mut self, reading: &str, surface: &str) {
         let now = now_unix();
+        let selection_order = self.next_selection_order;
+        self.next_selection_order = self.next_selection_order.saturating_add(1);
         let entries = self.entries.entry(reading.to_string()).or_default();
 
         if let Some(entry) = entries.iter_mut().find(|e| e.surface == surface) {
-            entry.frequency += 1;
+            entry.frequency = entry.frequency.saturating_add(1);
+            entry.last_access = now;
+            entry.explicit = true;
+            entry.selection_order = selection_order;
+        } else {
+            entries.push(LearningEntry {
+                surface: surface.to_string(),
+                frequency: 1,
+                last_access: now,
+                explicit: true,
+                selection_order,
+            });
+        }
+        self.dirty = true;
+    }
+
+    /// Record a conversion committed without explicit candidate selection.
+    pub fn record_automatic(&mut self, reading: &str, surface: &str) {
+        let now = now_unix();
+        let entries = self.entries.entry(reading.to_string()).or_default();
+
+        if let Some(entry) = entries.iter_mut().find(|e| e.surface == surface) {
+            entry.frequency = entry.frequency.saturating_add(1);
             entry.last_access = now;
         } else {
             entries.push(LearningEntry {
                 surface: surface.to_string(),
                 frequency: 1,
                 last_access: now,
+                explicit: false,
+                selection_order: 0,
             });
         }
         self.dirty = true;
     }
 
-    /// Exact-match lookup: returns `(surface, score)` pairs sorted by score descending.
+    /// Exact-match lookup: returns `(surface, score)` pairs in learning priority order.
     pub fn lookup(&self, reading: &str) -> Vec<(String, f64)> {
         let now = now_unix();
         let Some(entries) = self.entries.get(reading) else {
             return Vec::new();
         };
-        let mut scored: Vec<(String, f64)> = entries
+        let mut scored: Vec<(&LearningEntry, f64)> = entries
             .iter()
-            .map(|e| (e.surface.clone(), score(e, now)))
+            .map(|entry| (entry, score(entry, now)))
             .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.sort_by(|a, b| compare_priority(a.0, b.0, a.1, b.1));
         scored
+            .into_iter()
+            .map(|(entry, score)| (entry.surface.clone(), score))
+            .collect()
     }
 
-    /// Prefix-match lookup: returns `(reading, surface, score)` triples
-    /// for all readings that start with `prefix`, sorted by score descending.
+    /// Prefix-match lookup: returns `(reading, surface, score)` triples for all
+    /// readings that start with `prefix`, in learning priority order.
     pub fn prefix_lookup(&self, prefix: &str) -> Vec<(String, String, f64)> {
         let now = now_unix();
-        let mut results: Vec<(String, String, f64)> = Vec::new();
+        let mut results: Vec<(&LearningEntry, String, f64)> = Vec::new();
         for (reading, entries) in &self.entries {
             if reading.starts_with(prefix) {
                 for entry in entries {
-                    results.push((reading.clone(), entry.surface.clone(), score(entry, now)));
+                    results.push((entry, reading.clone(), score(entry, now)));
                 }
             }
         }
-        results.sort_by(|a, b| b.2.total_cmp(&a.2));
+        results.sort_by(|a, b| compare_priority(a.0, b.0, a.2, b.2));
         results
+            .into_iter()
+            .map(|(entry, reading, score)| (reading, entry.surface.clone(), score))
+            .collect()
     }
 
     /// Load a learning cache from a TSV file.
@@ -121,7 +160,22 @@ impl LearningCache {
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            let explicit = match parts.get(4) {
+                None | Some(&"explicit") => true,
+                Some(&"automatic") => false,
+                Some(_) => continue,
+            };
+            let selection_order = match parts.get(5) {
+                Some(value) => match value.parse() {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                },
+                None => last_access,
+            };
 
+            cache.next_selection_order = cache
+                .next_selection_order
+                .max(selection_order.saturating_add(1));
             cache
                 .entries
                 .entry(reading.to_string())
@@ -130,6 +184,8 @@ impl LearningCache {
                     surface: surface.to_string(),
                     frequency,
                     last_access,
+                    explicit,
+                    selection_order,
                 });
         }
 
@@ -138,7 +194,7 @@ impl LearningCache {
         Ok(cache)
     }
 
-    /// Save the cache to a TSV file, evicting low-score entries if over capacity.
+    /// Save the cache to a TSV file, evicting low-priority entries if over capacity.
     pub fn save(&mut self, path: &Path) -> anyhow::Result<()> {
         self.evict();
 
@@ -148,7 +204,7 @@ impl LearningCache {
 
         let file = std::fs::File::create(path)?;
         let mut writer = std::io::BufWriter::new(file);
-        writeln!(writer, "# karukan learning cache v1")?;
+        writeln!(writer, "# karukan learning cache v2")?;
 
         // Sort readings for deterministic output
         let mut readings: Vec<&String> = self.entries.keys().collect();
@@ -159,8 +215,17 @@ impl LearningCache {
                 for entry in entries {
                     writeln!(
                         writer,
-                        "{}\t{}\t{}\t{}",
-                        reading, entry.surface, entry.frequency, entry.last_access
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        reading,
+                        entry.surface,
+                        entry.frequency,
+                        entry.last_access,
+                        if entry.explicit {
+                            "explicit"
+                        } else {
+                            "automatic"
+                        },
+                        entry.selection_order
                     )?;
                 }
             }
@@ -181,7 +246,7 @@ impl LearningCache {
         self.entries.values().map(|v| v.len()).sum()
     }
 
-    /// Evict lowest-score entries until total count is within `max_entries`.
+    /// Evict lowest-priority entries until total count is within `max_entries`.
     fn evict(&mut self) {
         let total = self.entry_count();
         if total <= self.max_entries {
@@ -190,20 +255,34 @@ impl LearningCache {
 
         let now = now_unix();
         // Collect all entries with their (reading, index, score)
-        let mut all: Vec<(String, usize, f64)> = Vec::with_capacity(total);
+        let mut all: Vec<(String, usize, bool, u64, f64)> = Vec::with_capacity(total);
         for (reading, entries) in &self.entries {
             for (i, entry) in entries.iter().enumerate() {
-                all.push((reading.clone(), i, score(entry, now)));
+                all.push((
+                    reading.clone(),
+                    i,
+                    entry.explicit,
+                    entry.selection_order,
+                    score(entry, now),
+                ));
             }
         }
-        // Sort by score ascending (lowest first = eviction candidates)
-        all.sort_by(|a, b| a.2.total_cmp(&b.2));
+        // Sort by priority ascending (lowest first = eviction candidates)
+        all.sort_by(|a, b| {
+            a.2.cmp(&b.2).then_with(|| {
+                if a.2 && b.2 {
+                    a.3.cmp(&b.3)
+                } else {
+                    a.4.total_cmp(&b.4)
+                }
+            })
+        });
 
         let to_remove = total - self.max_entries;
         // Collect indices to remove, grouped by reading
         let mut remove_set: HashMap<String, Vec<usize>> = HashMap::new();
-        for &(ref reading, idx, _) in all.iter().take(to_remove) {
-            remove_set.entry(reading.clone()).or_default().push(idx);
+        for (reading, idx, _, _, _) in all.iter().take(to_remove) {
+            remove_set.entry(reading.clone()).or_default().push(*idx);
         }
 
         // Remove entries in reverse index order to preserve indices
@@ -222,6 +301,22 @@ impl LearningCache {
             }
         }
     }
+}
+
+/// Compare entries in display priority order (best first).
+fn compare_priority(
+    left: &LearningEntry,
+    right: &LearningEntry,
+    left_score: f64,
+    right_score: f64,
+) -> std::cmp::Ordering {
+    right.explicit.cmp(&left.explicit).then_with(|| {
+        if left.explicit && right.explicit {
+            right.selection_order.cmp(&left.selection_order)
+        } else {
+            right_score.total_cmp(&left_score)
+        }
+    })
 }
 
 /// Compute a candidate score: recency-weighted with frequency bonus.
@@ -262,7 +357,7 @@ mod tests {
 
         let results = cache.lookup("きょう");
         assert_eq!(results.len(), 2);
-        // "今日" should have higher score (frequency 2 vs 1)
+        // "今日" was selected most recently.
         assert_eq!(results[0].0, "今日");
         assert_eq!(results[1].0, "京");
     }
@@ -317,7 +412,7 @@ mod tests {
 
         let results = loaded.lookup("きょう");
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, "今日"); // frequency 2
+        assert_eq!(results[0].0, "京"); // most recently selected
     }
 
     #[test]
@@ -344,7 +439,7 @@ mod tests {
         cache.record("d", "D");
         cache.record("e", "E");
 
-        // Boost some to give them higher scores
+        // Re-select some so the most recent choices survive eviction.
         cache.record("a", "A");
         cache.record("a", "A");
         cache.record("c", "C");
@@ -363,11 +458,15 @@ mod tests {
             surface: "A".to_string(),
             frequency: 1,
             last_access: now,
+            explicit: true,
+            selection_order: 1,
         };
         let old = LearningEntry {
             surface: "B".to_string(),
             frequency: 1,
             last_access: now.saturating_sub(30 * 86400), // 30 days ago
+            explicit: true,
+            selection_order: 1,
         };
         assert!(score(&recent, now) > score(&old, now));
     }
@@ -379,11 +478,15 @@ mod tests {
             surface: "A".to_string(),
             frequency: 100,
             last_access: now,
+            explicit: true,
+            selection_order: 1,
         };
         let low_freq = LearningEntry {
             surface: "B".to_string(),
             frequency: 1,
             last_access: now,
+            explicit: true,
+            selection_order: 1,
         };
         assert!(score(&high_freq, now) > score(&low_freq, now));
     }
@@ -403,8 +506,62 @@ mod tests {
         cache.save(file.path()).unwrap();
 
         let content = std::fs::read_to_string(file.path()).unwrap();
-        assert!(content.starts_with("# karukan learning cache v1"));
+        assert!(content.starts_with("# karukan learning cache v2"));
         assert!(content.contains("きょう\t今日\t1\t"));
+    }
+
+    #[test]
+    fn test_last_explicit_selection_wins_over_high_frequency() {
+        let mut cache = LearningCache::new(100);
+        for _ in 0..100 {
+            cache.record("きょう", "誤変換");
+        }
+
+        cache.record("きょう", "今日");
+
+        assert_eq!(cache.lookup("きょう")[0].0, "今日");
+    }
+
+    #[test]
+    fn test_automatic_commits_do_not_override_explicit_selection() {
+        let mut cache = LearningCache::new(100);
+        cache.record("きょう", "今日");
+
+        for _ in 0..100 {
+            cache.record_automatic("きょう", "誤変換");
+        }
+
+        assert_eq!(cache.lookup("きょう")[0].0, "今日");
+    }
+
+    #[test]
+    fn test_loads_v1_and_preserves_last_selected_wins_after_recording() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "# karukan learning cache v1\nきょう\t誤変換\t100\t1700000000\n",
+        )
+        .unwrap();
+
+        let mut cache = LearningCache::load(file.path(), 100).unwrap();
+        cache.record("きょう", "今日");
+
+        assert_eq!(cache.lookup("きょう")[0].0, "今日");
+    }
+
+    #[test]
+    fn test_v2_round_trip_preserves_explicit_priority_over_automatic_frequency() {
+        let mut cache = LearningCache::new(100);
+        cache.record("きょう", "今日");
+        for _ in 0..100 {
+            cache.record_automatic("きょう", "誤変換");
+        }
+        let file = NamedTempFile::new().unwrap();
+        cache.save(file.path()).unwrap();
+
+        let loaded = LearningCache::load(file.path(), 100).unwrap();
+
+        assert_eq!(loaded.lookup("きょう")[0].0, "今日");
     }
 
     #[test]

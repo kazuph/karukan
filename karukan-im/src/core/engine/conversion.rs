@@ -997,6 +997,13 @@ impl InputMethodEngine {
         }
     }
 
+    /// Record a live conversion committed without explicit candidate selection.
+    pub(super) fn record_automatic_learning(&mut self, reading: &str, surface: &str) {
+        if let Some(cache) = &mut self.learning {
+            cache.record_automatic(reading, surface);
+        }
+    }
+
     /// Commit the current conversion
     fn commit_conversion(&mut self) -> EngineResult {
         let Some((selected_text, reading)) = self.selected_conversion_info() else {

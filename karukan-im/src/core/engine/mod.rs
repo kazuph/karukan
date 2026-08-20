@@ -550,7 +550,7 @@ impl InputMethodEngine {
                     reading.clone()
                 };
                 // Record live conversion result in learning cache
-                self.record_learning(&reading, &text);
+                self.record_automatic_learning(&reading, &text);
                 self.converters.romaji.reset();
                 self.input_buf.clear();
                 self.live.text.clear();
