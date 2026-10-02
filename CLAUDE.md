@@ -140,6 +140,7 @@ cargo clippy --workspace  # Lint all crates
   - `cursor.rs` — Cursor movement
   - `display.rs` — Preedit text display
   - `mode.rs` — Mode switching (katakana, alphabet, live conversion)
+  - `transliteration.rs` — Google日本語入力-style re-display keys (F6-F10, Ctrl+J/K/;/L/:/'): hiragana / full-width katakana / half-width / full-width + half-width alphanumeric
   - `init.rs` — Model loading, dictionary setup, learning cache init
   - `strategy.rs` — Conversion strategy determination and adaptive model selection
   - `tests.rs` — Engine unit tests

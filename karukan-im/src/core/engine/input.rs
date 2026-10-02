@@ -121,7 +121,7 @@ impl InputMethodEngine {
         if key.modifiers.control_key && !key.modifiers.alt_key && key.keysym == Keysym::SPACE {
             self.converters.romaji.reset();
             self.input_buf.clear();
-            self.input_buf.insert("\u{3000}");
+            self.input_buf.insert("\u{3000}", " ");
             let preedit = self.set_composing_state();
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
@@ -203,9 +203,10 @@ impl InputMethodEngine {
         self.input_buf.clear();
 
         if self.input_mode == InputMode::Alphabet {
-            self.input_buf.insert(&ch.to_string());
+            self.input_buf.insert(&ch.to_string(), &ch.to_string());
         } else {
             let prev_output_len = 0;
+            self.input_buf.pending_keys.push(ch);
             let _event = self.converters.romaji.push(ch);
             let romaji_buffer = self.converters.romaji.buffer().to_string();
 
@@ -215,6 +216,7 @@ impl InputMethodEngine {
             // digits — let them enter Composing and accumulate in the preedit.
 
             if self.converters.romaji.output().is_empty() && romaji_buffer.is_empty() {
+                self.input_buf.pending_keys.clear();
                 return EngineResult::not_consumed();
             }
 
@@ -228,7 +230,10 @@ impl InputMethodEngine {
                     .chars()
                     .skip(prev_output_len)
                     .collect();
-                self.input_buf.insert(&new_chars);
+                let keys = self
+                    .input_buf
+                    .take_emitted_keys(self.converters.romaji.buffer().chars().count());
+                self.input_buf.insert(&new_chars, &keys);
             }
         }
 
@@ -241,7 +246,7 @@ impl InputMethodEngine {
 
     /// Insert a full-width space (U+3000) at cursor position
     pub(super) fn input_fullwidth_space(&mut self) -> EngineResult {
-        self.input_buf.insert("\u{3000}");
+        self.input_buf.insert("\u{3000}", " ");
         self.refresh_input_state()
     }
 
@@ -251,13 +256,18 @@ impl InputMethodEngine {
         key: &KeyEvent,
         shift_active: bool,
     ) -> EngineResult {
+        // Transliteration keys (Google日本語入力 表示し直し): F6-F10 and
+        // Ctrl+J/K/;/L/:/'. Re-displays the whole reading in the requested
+        // form and enters the Conversion state.
+        if let Some(kind) = Transliteration::from_key(key) {
+            return self.transliterate(kind);
+        }
+
         // Handle Ctrl+key shortcuts
         if key.modifiers.control_key && !key.modifiers.alt_key {
             match key.keysym {
                 // Ctrl+Space: insert full-width space (U+3000)
                 Keysym::SPACE => return self.input_fullwidth_space(),
-                // Ctrl+K: enter katakana mode
-                Keysym::KEY_K | Keysym::KEY_K_UPPER => return self.enter_katakana_mode(),
                 // Ctrl+A: move to beginning (Emacs-style Home)
                 Keysym::KEY_A | Keysym::KEY_A_UPPER => return self.move_caret_home(),
                 // Ctrl+B: move left (Emacs-style Left)
@@ -373,7 +383,7 @@ impl InputMethodEngine {
             self.pre_emoji_mode = Some(self.input_mode);
         }
         self.input_mode = InputMode::Emoji;
-        self.input_buf.insert(":");
+        self.input_buf.insert(":", ":");
         self.refresh_input_state()
     }
 
@@ -393,11 +403,12 @@ impl InputMethodEngine {
     /// In alphabet mode, inserts directly; otherwise goes through romaji conversion.
     pub(super) fn input_char(&mut self, ch: char) -> EngineResult {
         if matches!(self.input_mode, InputMode::Alphabet | InputMode::Emoji) {
-            self.input_buf.insert(&ch.to_string());
+            self.input_buf.insert(&ch.to_string(), &ch.to_string());
             return self.refresh_input_state();
         }
 
         let prev_output_len = self.converters.romaji.output().chars().count();
+        self.input_buf.pending_keys.push(ch);
         let _event = self.converters.romaji.push(ch);
         let curr_output_len = self.converters.romaji.output().chars().count();
 
@@ -413,7 +424,10 @@ impl InputMethodEngine {
                 .chars()
                 .skip(prev_output_len)
                 .collect();
-            self.input_buf.insert(&new_chars);
+            let keys = self
+                .input_buf
+                .take_emitted_keys(self.converters.romaji.buffer().chars().count());
+            self.input_buf.insert(&new_chars, &keys);
         }
 
         // PassThrough chars no longer auto-commit. They accumulate in the preedit

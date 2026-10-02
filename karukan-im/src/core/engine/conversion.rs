@@ -340,7 +340,11 @@ impl InputMethodEngine {
     ///
     /// Sets up the preedit (highlighted selected text), updates the state, and
     /// returns an EngineResult with preedit, candidates, and aux text actions.
-    fn enter_conversion_state(&mut self, reading: &str, candidates: CandidateList) -> EngineResult {
+    pub(super) fn enter_conversion_state(
+        &mut self,
+        reading: &str,
+        candidates: CandidateList,
+    ) -> EngineResult {
         let selected_text = candidates.selected_text().unwrap_or(reading).to_string();
         let preedit = self.build_conversion_preedit(&selected_text);
 
@@ -358,12 +362,12 @@ impl InputMethodEngine {
             ))
     }
 
-    fn conversion_target_len(&self) -> usize {
+    pub(super) fn conversion_target_len(&self) -> usize {
         let total = self.input_buf.text.chars().count();
         self.input_buf.cursor_pos.min(total)
     }
 
-    fn conversion_target_reading(&self) -> String {
+    pub(super) fn conversion_target_reading(&self) -> String {
         self.input_buf
             .text
             .chars()
@@ -887,6 +891,12 @@ impl InputMethodEngine {
 
     /// Process key in conversion state
     pub(super) fn process_key_conversion(&mut self, key: &KeyEvent) -> EngineResult {
+        // Transliteration keys (Google日本語入力 表示し直し): apply the
+        // requested form to the focused segment.
+        if let Some(kind) = Transliteration::from_key(key) {
+            return self.transliterate(kind);
+        }
+
         if key.modifiers.control_key || key.modifiers.alt_key {
             if key.modifiers.control_key && !key.modifiers.alt_key {
                 match key.keysym {
@@ -959,9 +969,12 @@ impl InputMethodEngine {
         }
 
         let segment_reading = self.conversion_target_reading();
+        let keys_len = self.conversion_target_len().min(self.input_buf.keys.len());
+        let seg_keys: Vec<String> = self.input_buf.keys.drain(..keys_len).collect();
         self.conversion_history.push(ConversionSegment {
             reading: segment_reading,
             surface: selected_text,
+            keys: seg_keys,
         });
         self.input_buf.text = remainder;
         self.input_buf.cursor_pos = self.input_buf.text.chars().count();
@@ -980,6 +993,9 @@ impl InputMethodEngine {
         };
 
         let reading = segment.reading;
+        let mut keys = segment.keys;
+        keys.append(&mut self.input_buf.keys);
+        self.input_buf.keys = keys;
         self.input_buf.text = format!("{}{}", reading, self.input_buf.text);
         self.input_buf.cursor_pos = reading.chars().count();
         let candidate_list = self.candidate_list_for_reading(&reading);
@@ -1025,7 +1041,7 @@ impl InputMethodEngine {
         }
 
         self.state = InputState::Empty;
-        self.input_buf.text.clear();
+        self.input_buf.clear();
         self.conversion_history.clear();
         self.exit_emoji_mode();
 
@@ -1050,7 +1066,7 @@ impl InputMethodEngine {
         }
 
         self.state = InputState::Empty;
-        self.input_buf.text.clear();
+        self.input_buf.clear();
         self.conversion_history.clear();
         self.exit_emoji_mode();
 
@@ -1085,7 +1101,15 @@ impl InputMethodEngine {
                 .with_action(EngineAction::HideAuxText);
         }
 
-        // Set up composed_hiragana with the reading
+        // Set up composed_hiragana with the reading, restoring the raw
+        // keystrokes recorded when each segment was accepted.
+        let mut keys: Vec<String> = self
+            .conversion_history
+            .iter()
+            .flat_map(|segment| segment.keys.iter().cloned())
+            .collect();
+        keys.append(&mut self.input_buf.keys);
+        self.input_buf.keys = keys;
         self.input_buf.text = reading.clone();
         self.input_buf.cursor_pos = self.input_buf.text.chars().count();
 
@@ -1187,6 +1211,7 @@ impl InputMethodEngine {
         // Commit immediately after digit selection
 
         self.state = InputState::Empty;
+        self.input_buf.clear();
         self.conversion_history.clear();
 
         EngineResult::consumed()
@@ -1197,7 +1222,7 @@ impl InputMethodEngine {
     }
 
     /// Update preedit after candidate selection change
-    fn update_conversion_preedit(
+    pub(super) fn update_conversion_preedit(
         &mut self,
         selected_text: &str,
         candidates: &CandidateList,

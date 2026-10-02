@@ -15,8 +15,10 @@ mod mode;
 mod strategy;
 #[cfg(feature = "inference-thread-budget-bench")]
 pub mod thread_budget_bench;
+mod transliteration;
 mod types;
 
+pub(super) use transliteration::Transliteration;
 pub use types::*;
 
 use conversion_cache::ConversionResultCache;
@@ -92,6 +94,11 @@ struct AnnotatedCandidate {
 pub(in crate::core) struct ConversionSegment {
     reading: String,
     surface: String,
+    /// Raw keystrokes that produced `reading` (the slice of
+    /// `input_buf.keys` the segment covered when it was accepted), kept so
+    /// retreat/cancel can restore them and alphabet transliteration still
+    /// sees the user's actual key sequence.
+    keys: Vec<String>,
 }
 
 impl AnnotatedCandidate {
@@ -363,7 +370,8 @@ impl InputMethodEngine {
             .skip(prev_output_len)
             .collect();
         if !new_from_flush.is_empty() {
-            self.input_buf.insert(&new_from_flush);
+            let keys = std::mem::take(&mut self.input_buf.pending_keys);
+            self.input_buf.insert(&new_from_flush, &keys);
         }
     }
 
