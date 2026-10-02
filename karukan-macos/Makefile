@@ -5,6 +5,7 @@ CARGO_MANIFEST = ../Cargo.toml
 CARGO_TARGET = ../target
 DATA_DIR = $(HOME)/Library/Application Support/com.karukan.karukan-im
 DICT_URL = https://github.com/togatoga/karukan/releases/latest/download/dict.tgz
+LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 .PHONY: all build build-universal bundle install install-dict install-models test fmt lint clean
 
@@ -74,6 +75,11 @@ install: bundle install-dict install-models
 	rm -rf "$(INSTALL_DIR)/Karukan.app"
 	cp -a $(APP) "$(INSTALL_DIR)/"
 	-killall KarukanIME 2>/dev/null || true
+	# Unregister the build-tree app before deleting it: a stale
+	# LaunchServices entry for out/Karukan.app can shadow the installed
+	# copy (same bundle ID) and break activation.
+	-$(LSREGISTER) -u "$(abspath $(APP))" 2>/dev/null || true
+	rm -rf $(APP)
 	@echo "Installed to $(INSTALL_DIR)/Karukan.app"
 	@echo "First install: log out and back in, then add Karukan in System Settings > Keyboard > Input Sources."
 
@@ -84,4 +90,5 @@ lint:
 	swift-format lint -r Sources/ Tests/
 
 clean:
+	-$(LSREGISTER) -u "$(abspath $(APP))" 2>/dev/null || true
 	rm -rf .build/ $(OUTDIR)/

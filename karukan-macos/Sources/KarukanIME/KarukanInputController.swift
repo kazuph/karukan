@@ -15,6 +15,12 @@ class KarukanInputController: IMKInputController {
     /// engine actions). Used to decide when to refresh surrounding text.
     private var hasPreedit = false
 
+    /// Diagnostics for the "IME stays selected but no keys arrive"
+    /// failure: when macOS last activated this client session, and how
+    /// many keyDown events reached `handle` since then.
+    private var activatedAt: Date?
+    private var keyCount = 0
+
     // MARK: - Event handling
 
     override func recognizedEvents(_ sender: Any!) -> Int {
@@ -24,6 +30,7 @@ class KarukanInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event else { return false }
         guard event.type == .keyDown else { return false }
+        keyCount += 1
         guard let client = sender as? (any IMKTextInput) else { return false }
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -96,7 +103,22 @@ class KarukanInputController: IMKInputController {
 
     // MARK: - Lifecycle
 
+    override func activateServer(_ sender: Any!) {
+        activatedAt = Date()
+        keyCount = 0
+        let clientBundleID = (sender as? (any IMKTextInput))?.bundleIdentifier() ?? "unknown"
+        NSLog("KarukanIME: activated (client=\(clientBundleID))")
+        super.activateServer(sender)
+    }
+
     override func deactivateServer(_ sender: Any!) {
+        if let activatedAt {
+            let elapsedMs = Int(Date().timeIntervalSince(activatedAt) * 1000)
+            NSLog("KarukanIME: deactivated after \(elapsedMs)ms, keys=\(keyCount)")
+        } else {
+            NSLog("KarukanIME: deactivated (no activateServer seen), keys=\(keyCount)")
+        }
+        self.activatedAt = nil
         // Mozc-style: commit the pending preedit on focus loss, then
         // persist what the user taught us.
         if let client = sender as? (any IMKTextInput) {

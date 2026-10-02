@@ -112,7 +112,6 @@ final class KeyCodeMapTests: XCTestCase {
     }
 }
 
-
 final class Utf16ConversionTests: XCTestCase {
     func testAsciiOffsets() {
         XCTAssertEqual(utf16Offset(ofScalarOffset: 2, in: "abc"), 2)
