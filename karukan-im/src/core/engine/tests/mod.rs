@@ -18,6 +18,7 @@ mod passthrough;
 mod rewriter;
 mod strategy;
 mod surrounding;
+mod transliteration;
 
 fn press(ch: char) -> KeyEvent {
     KeyEvent::press(Keysym(ch as u32))

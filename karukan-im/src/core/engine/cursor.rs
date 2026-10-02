@@ -24,6 +24,7 @@ impl InputMethodEngine {
         // If romaji buffer is not empty, backspace from buffer (not from composed text)
         if !self.converters.romaji.buffer().is_empty() {
             self.converters.romaji.backspace();
+            self.input_buf.pending_keys.pop();
             if let Some(result) = self.try_reset_if_empty() {
                 return result;
             }
