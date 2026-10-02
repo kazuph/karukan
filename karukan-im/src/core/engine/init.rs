@@ -467,7 +467,7 @@ mod thread_budget_tests {
         let mut light_failure_engine =
             InputMethodEngine::with_config(EngineConfig::from_settings(&Settings::default()));
         light_failure_engine
-            .init_kanji_converter_with_model("jinen-v1-small-q5", 4)
+            .init_kanji_converter_with_model("jinen-v2-small-q5", 4)
             .expect("Main real model must initialize");
         assert!(
             light_failure_engine

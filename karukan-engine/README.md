@@ -47,7 +47,7 @@ assert_eq!(converter.output(), "こんにちは");
 use karukan_engine::{Backend, KanaKanjiConverter};
 
 // モデルの読み込み（初回使用時にHuggingFaceからダウンロード）
-let backend = Backend::from_variant_id("jinen-v1-small-q5")?;
+let backend = Backend::from_variant_id("jinen-v2-small-q5")?;
 let converter = KanaKanjiConverter::new(backend)?;
 
 let candidates = converter.convert("かんじ", "", 3)?;
@@ -106,7 +106,9 @@ let results = dict.common_prefix_search("きょうと");
 | バリアントID | パラメータ数 | 量子化 | デフォルト |
 |------------|-----------|--------------|---------|
 | `jinen-v1-xsmall-q5` | 26M | Q5_K_M | |
-| `jinen-v1-small-q5` | 90M | Q5_K_M | Yes |
+| `jinen-v1-small-q5` | 90M | Q5_K_M | |
+| `jinen-v2-xsmall-q5` | 36M | Q5_K_M | |
+| `jinen-v2-small-q5` | 110M | Q5_K_M | Yes |
 
 ### jinen Format
 

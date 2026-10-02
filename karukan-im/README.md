@@ -31,8 +31,19 @@ fcitx5（Linux）および macOS Swift フロントエンドで共有される�
 | Delete | カーソル位置の文字を削除 |
 | ← → | カーソル移動 |
 | Home / End | カーソルを先頭 / 末尾に移動 |
-| Ctrl+K | カタカナモードに切り替え |
 | Ctrl+Space | 全角スペースを入力 |
+
+### 表示し直し（トランスリテレーション）
+
+Google日本語入力（Mozc のことえりキー設定）と同じ割り当てです。入力中に押すと読み全体を指定の形で表示し直して変換モードに入り、変換中に押すと選択中の文節だけをその形にします。英数は実際に打ったキーの並びを使い、続けて押すと 小文字 → 大文字 → 先頭だけ大文字 → 小文字… と切り替わります。
+
+| キー | 動作 |
+|------|------|
+| Ctrl+J / F6 | ひらがなで表示 |
+| Ctrl+K / F7 | 全角カタカナで表示 |
+| Ctrl+; / F8 | 半角で表示（かな → 半角カタカナ、全角英数 → 半角英数） |
+| Ctrl+L / F9 | 全角英数で表示 |
+| Ctrl+: / Ctrl+' / F10 | 半角英数で表示 |
 
 ### 変換モード
 
@@ -50,7 +61,6 @@ fcitx5（Linux）および macOS Swift フロントエンドで共有される�
 | キー | 動作 |
 |------|------|
 | Shift+英字 | 一時的に英字入力（大文字）。Shiftなし英字キーでかな入力へ復帰 |
-| Ctrl+K | カタカナモードに切り替え |
 | Right Super | 英数字/カタカナ → ひらがなモードに復帰 |
 | Ctrl+Shift+L | ライブ変換のON/OFF |
 
@@ -75,8 +85,8 @@ composing_chunk_len = 30        # ライブ変換で1回のモデル変換が扱
 strategy = "adaptive"           # 変換ストラテジー（adaptive / light / main）
 num_candidates = 9              # 変換候補数（Space押下時）
 n_threads = 4                   # 推論スレッド数（0 = 全コア使用）
-model = "jinen-v1-small-q5"     # メインモデル（モデルID or GGUFパス）
-light_model = "jinen-v1-xsmall-q5"  # 軽量モデル（ビームサーチ・長文用）
+model = "jinen-v2-small-q5"     # メインモデル（モデルID or GGUFパス）
+light_model = "jinen-v2-xsmall-q5"  # 軽量モデル（ビームサーチ・長文用）
 use_context = true              # Surrounding Textを変換に使用する
 max_context_length = 10         # コンテキストの最大文字数
 short_input_threshold = 10      # ビームサーチを使うトークン数の上限

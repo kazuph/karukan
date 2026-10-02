@@ -200,6 +200,40 @@ pub fn hiragana_to_half_katakana(text: &str) -> String {
     katakana_to_half_width(&hiragana_to_katakana(text))
 }
 
+/// Map one character to its half-width form for the 半角 transliteration
+/// (Mozc `Transliteration::HALF_WIDTH`): full-width katakana and kana
+/// punctuation → half-width, full-width ASCII (U+FF01–U+FF5E) → ASCII,
+/// ideographic space → ASCII space. Everything else passes through.
+fn half_width_char(c: char) -> String {
+    let katakana = katakana_char_to_half(c);
+    if katakana != c.to_string() {
+        return katakana;
+    }
+    match c {
+        '\u{3000}' => " ".to_string(),
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c).to_string(),
+        _ => katakana,
+    }
+}
+
+/// Half-width transliteration of arbitrary text.
+///
+/// Hiragana goes via katakana so `がっこう` → `ｶﾞｯｺｳ`, kana punctuation
+/// (`。` `、` `「」` `・` `ー`) maps to its half-width counterpart, and
+/// full-width ASCII/digits map to half-width ASCII. Kanji and other
+/// characters are passed through unchanged.
+pub fn to_half_width(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let c = match c {
+            '\u{3041}'..='\u{3096}' => char::from_u32(c as u32 + 0x60).unwrap_or(c),
+            _ => c,
+        };
+        out.push_str(&half_width_char(c));
+    }
+    out
+}
+
 /// Map a half-width ASCII alphanumeric character (digit / Latin letter) to
 /// its full-width form (e.g. `a` → `ａ`, `Z` → `Ｚ`, `5` → `５`). All other
 /// characters pass through unchanged.

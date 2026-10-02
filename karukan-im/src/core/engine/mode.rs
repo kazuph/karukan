@@ -5,8 +5,14 @@ use tracing::debug;
 use super::*;
 
 impl InputMethodEngine {
-    /// Enter katakana mode (Ctrl+k)
+    /// Enter katakana mode (formerly Ctrl+K).
+    ///
+    /// The Ctrl+K binding now runs the 全角カタカナ transliteration instead
+    /// (Google日本語入力 parity), so this is no longer reachable via keys.
+    /// The mode itself is kept: the engine still supports Katakana display,
+    /// and Right Super / the JIS かな key return from it to Hiragana.
     /// One-way switch to Katakana; use Right Super to return to Hiragana.
+    #[allow(dead_code)]
     pub(super) fn enter_katakana_mode(&mut self) -> EngineResult {
         // Already in katakana mode: nothing to do
         if self.input_mode == InputMode::Katakana {

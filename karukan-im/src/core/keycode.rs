@@ -62,6 +62,8 @@ impl Keysym {
     pub const KEY_E_UPPER: Keysym = Keysym(0x0045); // uppercase 'E'
     pub const KEY_F: Keysym = Keysym(0x0066); // lowercase 'f'
     pub const KEY_F_UPPER: Keysym = Keysym(0x0046); // uppercase 'F'
+    pub const KEY_J: Keysym = Keysym(0x006a); // lowercase 'j'
+    pub const KEY_J_UPPER: Keysym = Keysym(0x004a); // uppercase 'J'
     pub const KEY_K: Keysym = Keysym(0x006b); // lowercase 'k'
     pub const KEY_K_UPPER: Keysym = Keysym(0x004b); // uppercase 'K'
     pub const KEY_N: Keysym = Keysym(0x006e); // lowercase 'n'
@@ -87,6 +89,15 @@ impl Keysym {
 
     /// XK_yen / U+00A5 YEN SIGN. JIS 円キー sends this Latin-1 keysym.
     pub const YEN: Keysym = Keysym(0x00a5);
+
+    // Punctuation keysyms used by the transliteration shortcuts
+    // (Google日本語入力 / Mozc kotoeri keymap): Ctrl+; → 半角,
+    // Ctrl+: and Ctrl+' → 半角英数. The JIS `:` key and the US `'`
+    // key share keyCode 39 on macOS but resolve to these distinct
+    // keysyms, so both are listed.
+    pub const SEMICOLON: Keysym = Keysym(0x003b);
+    pub const COLON: Keysym = Keysym(0x003a);
+    pub const APOSTROPHE: Keysym = Keysym(0x0027);
 
     /// Check if this keysym represents a printable character
     pub fn is_printable(&self) -> bool {

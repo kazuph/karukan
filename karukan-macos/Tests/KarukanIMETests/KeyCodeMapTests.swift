@@ -90,6 +90,70 @@ final class KeyCodeMapTests: XCTestCase {
         XCTAssertEqual(event?.modifiers.shift, true)
     }
 
+    func testFunctionKeys() {
+        // F6-F10 carry the Google日本語入力 transliteration shortcuts
+        // (ひらがな/全角カタカナ/半角/全角英数/半角英数).
+        for (keyCode, keysym) in [
+            (96, 0xffc2),  // F5
+            (97, 0xffc3),  // F6
+            (98, 0xffc4),  // F7
+            (100, 0xffc5),  // F8
+            (101, 0xffc6),  // F9
+            (109, 0xffc7),  // F10
+        ] {
+            XCTAssertEqual(
+                KeyCodeMap.translate(
+                    keyCode: UInt16(keyCode), characters: nil,
+                    charactersIgnoringModifiers: nil, flags: []
+                )?.keysym,
+                UInt32(keysym))
+        }
+    }
+
+    func testCtrlSemicolonTransliterationKey() {
+        // Ctrl+; → 半角. `;` has no ASCII control-character mapping, so
+        // IMK delivers the plain character with the control flag set.
+        let event = KeyCodeMap.translate(
+            keyCode: 41, characters: ";", charactersIgnoringModifiers: ";", flags: [.control])
+        XCTAssertEqual(event?.keysym, 0x3b)
+        XCTAssertEqual(event?.modifiers.control, true)
+    }
+
+    func testCtrlColonJisTransliterationKey() {
+        // JIS `:` key (keyCode 39, shared with US `'`). With Control held,
+        // `characters` may be empty/non-ASCII; charactersIgnoringModifiers
+        // still resolves ":" on a JIS layout.
+        let event = KeyCodeMap.translate(
+            keyCode: 39, characters: ":", charactersIgnoringModifiers: ":", flags: [.control])
+        XCTAssertEqual(event?.keysym, 0x3a)
+        XCTAssertEqual(event?.modifiers.control, true)
+
+        // Same physical event where `characters` got mangled into a
+        // non-ASCII/empty form must still resolve via the fallback.
+        let fallback = KeyCodeMap.translate(
+            keyCode: 39, characters: nil, charactersIgnoringModifiers: ":", flags: [.control])
+        XCTAssertEqual(fallback?.keysym, 0x3a)
+        XCTAssertEqual(fallback?.modifiers.control, true)
+    }
+
+    func testCtrlApostropheUsTransliterationKey() {
+        // US `'` key (keyCode 39) + Control → 半角英数.
+        let event = KeyCodeMap.translate(
+            keyCode: 39, characters: "'", charactersIgnoringModifiers: "'", flags: [.control])
+        XCTAssertEqual(event?.keysym, 0x27)
+        XCTAssertEqual(event?.modifiers.control, true)
+    }
+
+    func testCtrlShiftSemicolonResolvesColon() {
+        // US layout: Ctrl+Shift+; produces ":" — the 半角英数 shortcut.
+        let event = KeyCodeMap.translate(
+            keyCode: 41, characters: ":", charactersIgnoringModifiers: ";",
+            flags: [.control, .shift])
+        XCTAssertEqual(event?.keysym, 0x3a)
+        XCTAssertEqual(event?.modifiers.control, true)
+        XCTAssertEqual(event?.modifiers.shift, true)
+    }
+
     func testJisYenSignIsTranslated() {
         // JIS 円キー: both `characters` and `charactersIgnoringModifiers`
         // are U+00A5. ASCII-only translation returned nil, so IMK replaced

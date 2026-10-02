@@ -191,11 +191,11 @@ fn test_alphabet_mode_with_kana_keeps_converting() {
 
     // Typing another latin char re-runs refresh_input_state. Because the buffer
     // still has kana, the "preserve display" early-return is bypassed and
-    // conversion runs again; with no model loaded run_auto_suggest returns the
-    // reading itself, so live.text is cleared rather than frozen.
+    // conversion runs again; the stale live.text is either cleared (no model /
+    // no useful suggestion) or replaced with a fresh conversion of "あAb".
     engine.process_key(&press('b'));
-    assert!(
-        engine.live.text.is_empty(),
+    assert_ne!(
+        engine.live.text, "亜A",
         "mixed kana buffer must reconvert in alphabet mode, not preserve stale live.text"
     );
 }
