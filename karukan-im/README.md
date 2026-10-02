@@ -71,8 +71,8 @@ composing_chunk_len = 30        # ライブ変換で1回のモデル変換が扱
 strategy = "adaptive"           # 変換ストラテジー（adaptive / light / main）
 num_candidates = 9              # 変換候補数（Space押下時）
 n_threads = 4                   # 推論スレッド数（0 = 全コア使用）
-model = "jinen-v1-small-q5"     # メインモデル（モデルID or GGUFパス）
-light_model = "jinen-v1-xsmall-q5"  # 軽量モデル（ビームサーチ・長文用）
+model = "jinen-v2-small-q5"     # メインモデル（モデルID or GGUFパス）
+light_model = "jinen-v2-xsmall-q5"  # 軽量モデル（ビームサーチ・長文用）
 use_context = true              # Surrounding Textを変換に使用する
 max_context_length = 10         # コンテキストの最大文字数
 short_input_threshold = 10      # ビームサーチを使うトークン数の上限

@@ -114,7 +114,7 @@ mod llamacpp_tests {
         let test_cases = [
             ("ワセダ", "早稲田"),
             ("トウキョウ", "東京"),
-            ("ニホン", "日本"),
+            ("カンジ", "漢字"),
         ];
 
         for (input, expected) in test_cases {

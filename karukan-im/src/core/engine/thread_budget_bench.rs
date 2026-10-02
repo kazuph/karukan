@@ -8,8 +8,8 @@ use crate::core::keycode::KeyModifiers;
 use super::*;
 
 const REQUEST_CANDIDATES: usize = 9;
-const MAIN_MODEL_ID: &str = "jinen-v1-small-q5";
-const LIGHT_MODEL_ID: &str = "jinen-v1-xsmall-q5";
+const MAIN_MODEL_ID: &str = "jinen-v2-small-q5";
+const LIGHT_MODEL_ID: &str = "jinen-v2-xsmall-q5";
 const READING: &str = "なにがげんいんかわかる";
 const LEFT_CONTEXT: &str = "今日はいい";
 
