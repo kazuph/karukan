@@ -166,12 +166,16 @@ fn test_katakana_baked_on_switch_to_alphabet() {
     // The katakana text should be preserved, not reverted to hiragana
     assert_eq!(engine.input_buf.text, "アイウエオL");
 
-    // Type alphabet chars → appended after katakana
+    // The first unshifted letter ends the session and returns to
+    // Katakana mode: 'i' converts through romaji into い (displayed
+    // as イ), then 'nu' becomes ヌ and 'x' stays pending romaji.
     engine.process_key(&press('i'));
+    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLイ");
+    assert!(engine.input_mode == InputMode::Katakana);
     engine.process_key(&press('n'));
     engine.process_key(&press('u'));
     engine.process_key(&press('x'));
-    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLinux");
+    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLイヌx");
 }
 
 #[test]

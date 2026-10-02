@@ -14,6 +14,9 @@ impl InputMethodEngine {
         }
 
         self.input_mode = InputMode::Katakana;
+        // An explicit mode switch ends any Shift+letter session; the new
+        // mode wins over the session's recorded return mode.
+        self.exit_shift_alpha();
         // Clear live conversion text so katakana mode takes priority on commit
         self.live.text.clear();
 

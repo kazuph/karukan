@@ -184,7 +184,7 @@ impl InputMethodEngine {
                 ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
             if is_shift_alpha && self.input_mode != InputMode::Alphabet {
-                self.input_mode = InputMode::Alphabet;
+                self.start_shift_alpha();
             }
             let ch = if self.input_mode == InputMode::Alphabet && is_shift_alpha {
                 ch.to_ascii_uppercase()
@@ -334,14 +334,21 @@ impl InputMethodEngine {
                     let is_shift_alpha =
                         ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
+                    // The first unshifted letter ends a Shift+letter session:
+                    // macOS never reports the Shift release to the IME, so this
+                    // key is where the engine returns to kana input.
+                    if ch.is_ascii_lowercase() && !shift_active && self.shift_alpha.is_some() {
+                        return self.end_shift_alpha(ch);
+                    }
+
                     if is_shift_alpha && self.input_mode != InputMode::Alphabet {
                         // Bake katakana before switching so preedit doesn't revert
                         if self.input_mode == InputMode::Katakana {
                             self.bake_katakana();
                         }
-                        self.input_mode = InputMode::Alphabet;
                         self.flush_romaji_to_composed();
                         self.live.text.clear();
+                        self.start_shift_alpha();
                     }
                     let ch = if self.input_mode == InputMode::Alphabet && is_shift_alpha {
                         ch.to_ascii_uppercase()
@@ -353,6 +360,27 @@ impl InputMethodEngine {
                 EngineResult::not_consumed()
             }
         }
+    }
+
+    /// Open a Shift+letter temporary alphabet session: switch to
+    /// [`InputMode::Alphabet`] and remember where to return.
+    /// Callers in Composing bake katakana / flush pending romaji first,
+    /// so the return mode is recorded while `input_mode` still holds the
+    /// mode the user was actually in.
+    fn start_shift_alpha(&mut self) {
+        self.shift_alpha = Some(self.input_mode);
+        self.input_mode = InputMode::Alphabet;
+    }
+
+    /// End a Shift+letter session at the first unshifted letter: restore
+    /// the mode the session opened from, then run the letter through the
+    /// normal romaji path (`Shift+T` `o` → `Tお…`). Shifted letters are
+    /// pure literals — they never feed the romaji converter.
+    fn end_shift_alpha(&mut self, ch: char) -> EngineResult {
+        if let Some(return_mode) = self.shift_alpha.take() {
+            self.input_mode = return_mode;
+        }
+        self.input_char(ch)
     }
 
     /// Begin a new emoji-shortcode composing session.
@@ -457,6 +485,7 @@ impl InputMethodEngine {
             self.live.text.clear();
             self.chunks.clear();
             self.composing_candidates = None;
+            self.exit_shift_alpha();
             return EngineResult::consumed()
                 .with_action(EngineAction::HideCandidates)
                 .with_action(EngineAction::HideAuxText);
@@ -477,6 +506,7 @@ impl InputMethodEngine {
         self.composing_candidates = None;
         self.state = InputState::Empty;
         self.exit_emoji_mode();
+        self.exit_shift_alpha();
 
         // HideCandidates is required here: the auto-suggest/live-conversion
         // window may be open while Composing, and the macOS frontend's
@@ -525,6 +555,8 @@ impl InputMethodEngine {
         // whatever mode they were in before typing `:` so their next
         // word doesn't unexpectedly stay in ASCII-passthrough mode.
         self.exit_emoji_mode();
+        // A Shift+letter session ends the same way on cancel.
+        self.exit_shift_alpha();
 
         let mut result = EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))

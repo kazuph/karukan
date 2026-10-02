@@ -1028,6 +1028,7 @@ impl InputMethodEngine {
         self.input_buf.text.clear();
         self.conversion_history.clear();
         self.exit_emoji_mode();
+        self.exit_shift_alpha();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
@@ -1053,6 +1054,7 @@ impl InputMethodEngine {
         self.input_buf.text.clear();
         self.conversion_history.clear();
         self.exit_emoji_mode();
+        self.exit_shift_alpha();
 
         // Start new input with the character
         let new_input_result = self.start_input(ch);
@@ -1079,6 +1081,7 @@ impl InputMethodEngine {
         if reading.is_empty() {
             self.state = InputState::Empty;
             self.input_buf.clear();
+            self.exit_shift_alpha();
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(Preedit::new()))
                 .with_action(EngineAction::HideCandidates)
@@ -1188,6 +1191,7 @@ impl InputMethodEngine {
 
         self.state = InputState::Empty;
         self.conversion_history.clear();
+        self.exit_shift_alpha();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
@@ -1277,6 +1281,7 @@ impl InputMethodEngine {
         self.live.text.clear();
         self.chunks.clear();
         self.composing_candidates = None;
+        self.exit_shift_alpha();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
