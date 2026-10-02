@@ -10,9 +10,9 @@ use std::sync::OnceLock;
 /// Top-level config parsed from `models.toml`
 #[derive(Debug, Deserialize)]
 pub struct ModelRegistry {
-    /// Default variant id (e.g. "jinen-v1-xsmall-q5")
+    /// Default variant id (e.g. "jinen-v2-small-q5")
     pub default_model: String,
-    /// Model families keyed by short name (e.g. "jinen-v1-xsmall")
+    /// Model families keyed by short name (e.g. "jinen-v2-xsmall")
     pub models: HashMap<String, ModelFamily>,
 }
 
@@ -30,7 +30,7 @@ pub struct ModelFamily {
 /// A single downloadable GGUF variant
 #[derive(Debug, Deserialize)]
 pub struct VariantConfig {
-    /// Unique variant id (e.g. "jinen-v1-xsmall-q5")
+    /// Unique variant id (e.g. "jinen-v2-small-q5")
     pub id: String,
     /// GGUF filename in the HuggingFace repo
     pub filename: String,
@@ -49,7 +49,7 @@ pub fn registry() -> &'static ModelRegistry {
 }
 
 impl ModelRegistry {
-    /// Look up a variant by its unique id (e.g. "jinen-v1-xsmall-q5").
+    /// Look up a variant by its unique id (e.g. "jinen-v2-small-q5").
     ///
     /// Returns `(family, variant)` if found.
     pub fn find_variant(&self, variant_id: &str) -> Option<(&ModelFamily, &VariantConfig)> {
@@ -94,8 +94,8 @@ mod tests {
     #[test]
     fn test_parse_registry() {
         let reg = registry();
-        assert_eq!(reg.default_model, "jinen-v1-small-q5");
-        assert_eq!(reg.models.len(), 2, "Expected exactly 2 model families");
+        assert_eq!(reg.default_model, "jinen-v2-small-q5");
+        assert_eq!(reg.models.len(), 4, "Expected exactly 4 model families");
     }
 
     #[test]
@@ -119,11 +119,31 @@ mod tests {
     }
 
     #[test]
+    fn test_find_variant_v2_xsmall() {
+        let reg = registry();
+        let (family, variant) = reg
+            .find_variant("jinen-v2-xsmall-q5")
+            .expect("variant not found");
+        assert_eq!(family.repo_id, "togatogah/jinen-v2-xsmall.gguf");
+        assert_eq!(variant.filename, "jinen-v2-xsmall-Q5_K_M.gguf");
+    }
+
+    #[test]
+    fn test_find_variant_v2_small() {
+        let reg = registry();
+        let (family, variant) = reg
+            .find_variant("jinen-v2-small-q5")
+            .expect("variant not found");
+        assert_eq!(family.repo_id, "togatogah/jinen-v2-small.gguf");
+        assert_eq!(variant.filename, "jinen-v2-small-Q5_K_M.gguf");
+    }
+
+    #[test]
     fn test_default_variant() {
         let reg = registry();
         let (family, variant) = reg.default_variant().expect("default not found");
-        assert_eq!(variant.id, "jinen-v1-small-q5");
-        assert_eq!(family.repo_id, "togatogah/jinen-v1-small.gguf");
+        assert_eq!(variant.id, "jinen-v2-small-q5");
+        assert_eq!(family.repo_id, "togatogah/jinen-v2-small.gguf");
     }
 
     #[test]
@@ -132,19 +152,21 @@ mod tests {
         let ids = reg.all_variant_ids();
         assert_eq!(
             ids.len(),
-            2,
-            "Expected exactly 2 variants, got {}",
+            4,
+            "Expected exactly 4 variants, got {}",
             ids.len()
         );
         assert!(ids.contains(&"jinen-v1-xsmall-q5"));
         assert!(ids.contains(&"jinen-v1-small-q5"));
+        assert!(ids.contains(&"jinen-v2-xsmall-q5"));
+        assert!(ids.contains(&"jinen-v2-small-q5"));
     }
 
     #[test]
     fn test_iter_variants() {
         let reg = registry();
         let count = reg.iter_variants().count();
-        assert_eq!(count, 2, "Expected exactly 2 variants, got {}", count);
+        assert_eq!(count, 4, "Expected exactly 4 variants, got {}", count);
     }
 
     #[test]

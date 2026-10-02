@@ -68,7 +68,7 @@ impl Backend {
 
     /// Create a backend by looking up a variant id in the global registry.
     ///
-    /// E.g. `Backend::from_variant_id("jinen-v1-xsmall-q5")`
+    /// E.g. `Backend::from_variant_id("jinen-v2-small-q5")`
     pub fn from_variant_id(variant_id: &str) -> Result<Self> {
         let (family, variant) = registry()
             .find_variant(variant_id)
@@ -271,7 +271,7 @@ mod tests {
 
     fn test_default_model_conversion() {
         let backend =
-            Backend::from_variant_id("jinen-v1-small-q5").expect("Failed to load default model");
+            Backend::from_variant_id("jinen-v2-small-q5").expect("Failed to load default model");
         let converter = KanaKanjiConverter::new(backend).expect("Failed to create converter");
 
         let result = converter.convert("かんじ", "", 1);
@@ -293,9 +293,9 @@ mod tests {
     fn test_xsmall_special_tokens() {
         use super::super::hf_download::{get_path_by_id, get_tokenizer_path_by_id};
         use super::super::{CONTEXT_TOKEN, INPUT_START_TOKEN, OUTPUT_START_TOKEN};
-        let path = get_path_by_id("jinen-v1-xsmall-q5").expect("Failed to download GGUF");
+        let path = get_path_by_id("jinen-v2-xsmall-q5").expect("Failed to download GGUF");
         let tok_path =
-            get_tokenizer_path_by_id("jinen-v1-xsmall-q5").expect("Failed to download tokenizer");
+            get_tokenizer_path_by_id("jinen-v2-xsmall-q5").expect("Failed to download tokenizer");
         let model = LlamaCppModel::from_file(&path, &tok_path).expect("Failed to load model");
 
         let prompt = build_jinen_prompt("テスト", "");
@@ -327,7 +327,7 @@ mod tests {
 
     fn test_xsmall_conversion() {
         let backend =
-            Backend::from_variant_id("jinen-v1-xsmall-q5").expect("Failed to download GGUF");
+            Backend::from_variant_id("jinen-v2-xsmall-q5").expect("Failed to download GGUF");
         let converter = KanaKanjiConverter::new(backend).expect("Failed to create converter");
 
         let result = converter.convert("かんじ", "", 1);

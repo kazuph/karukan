@@ -20,8 +20,8 @@ struct Cli {
     /// Path to evaluation_items.json
     bench_path: PathBuf,
 
-    /// Model variant id (e.g. jinen-v1-xsmall-q5, jinen-v1-small-q5)
-    #[arg(long, default_value = "jinen-v1-xsmall-q5")]
+    /// Model variant id (e.g. jinen-v2-xsmall-q5, jinen-v2-small-q5)
+    #[arg(long, default_value = "jinen-v2-xsmall-q5")]
     model: String,
 
     /// Direct GGUF file path (overrides --model)
@@ -70,6 +70,8 @@ struct ItemResult {
     nfkc_expected: Vec<String>,
     nfkc_exact_match: bool,
     nfkc_min_cer: f64,
+    /// Wall-clock inference time for this item in milliseconds
+    latency_ms: f64,
 }
 
 /// Overall evaluation metrics
@@ -80,6 +82,11 @@ struct Metrics {
     avg_min_cer: f64,
     nfkc_exact_match_rate: f64,
     nfkc_avg_min_cer: f64,
+    /// Inference latency percentiles in milliseconds
+    latency_p50_ms: f64,
+    latency_p90_ms: f64,
+    latency_p99_ms: f64,
+    latency_mean_ms: f64,
     results: Vec<ItemResult>,
 }
 
@@ -208,7 +215,9 @@ fn main() -> Result<()> {
             .tokenize(&prompt)
             .with_context(|| format!("Failed to tokenize example {}", idx + 1))?;
 
+        let started = std::time::Instant::now();
         let output_tokens = model.generate(&tokens, 100, eos)?;
+        let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
         let generated = &output_tokens[tokens.len()..];
         let text = model.decode(generated, true)?;
 
@@ -273,6 +282,7 @@ fn main() -> Result<()> {
             nfkc_expected,
             nfkc_exact_match,
             nfkc_min_cer,
+            latency_ms,
         });
     }
 
@@ -298,6 +308,24 @@ fn main() -> Result<()> {
         0.0
     };
 
+    let mut latencies: Vec<f64> = results.iter().map(|r| r.latency_ms).collect();
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let percentile = |p: f64| -> f64 {
+        if latencies.is_empty() {
+            return 0.0;
+        }
+        let idx = ((latencies.len() - 1) as f64 * p / 100.0).round() as usize;
+        latencies[idx]
+    };
+    let latency_p50_ms = percentile(50.0);
+    let latency_p90_ms = percentile(90.0);
+    let latency_p99_ms = percentile(99.0);
+    let latency_mean_ms = if latencies.is_empty() {
+        0.0
+    } else {
+        latencies.iter().sum::<f64>() / latencies.len() as f64
+    };
+
     // Print summary
     println!();
     println!("{}", "=".repeat(50));
@@ -312,6 +340,11 @@ fn main() -> Result<()> {
         nfkc_exact_match_rate * 100.0
     );
     println!("Avg min CER      (NFKC): {:.4}", nfkc_avg_min_cer);
+    println!("{}", "-".repeat(50));
+    println!("Latency p50 (ms):     {:.1}", latency_p50_ms);
+    println!("Latency p90 (ms):     {:.1}", latency_p90_ms);
+    println!("Latency p99 (ms):     {:.1}", latency_p99_ms);
+    println!("Latency mean (ms):    {:.1}", latency_mean_ms);
     println!("{}", "=".repeat(50));
 
     // Save detailed results if requested
@@ -322,6 +355,10 @@ fn main() -> Result<()> {
             avg_min_cer,
             nfkc_exact_match_rate,
             nfkc_avg_min_cer,
+            latency_p50_ms,
+            latency_p90_ms,
+            latency_p99_ms,
+            latency_mean_ms,
             results,
         };
         let json = serde_json::to_string_pretty(&metrics)?;
