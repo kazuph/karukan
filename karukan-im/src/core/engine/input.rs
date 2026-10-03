@@ -344,11 +344,26 @@ impl InputMethodEngine {
                     let is_shift_alpha =
                         ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
-                    // The first unshifted letter ends a Shift+letter session:
-                    // macOS never reports the Shift release to the IME, so this
-                    // key is where the engine returns to kana input.
-                    if ch.is_ascii_lowercase() && !shift_active && self.shift_alpha.is_some() {
-                        return self.end_shift_alpha(ch);
+                    // The first unshifted letter ends a Shift+letter session —
+                    // but only after a run of two or more consecutive shifted
+                    // letters. macOS never reports the Shift release to the
+                    // IME, so this key is where the engine returns to kana
+                    // input for acronyms like `AB`. A shorter run keeps plain
+                    // alphabet input so `Shift+L` `i` `n` `u` `x` stays
+                    // `Linux`, and resets to zero so a later shifted letter
+                    // starts a fresh run (`Shift+G` `i` `t` `Shift+H` `u` `b`
+                    // stays `GitHub`).
+                    if ch.is_ascii_lowercase() && !shift_active {
+                        let armed = self
+                            .shift_alpha
+                            .as_ref()
+                            .is_some_and(|session| session.shifted_count >= 2);
+                        if armed {
+                            return self.end_shift_alpha(ch);
+                        }
+                        if let Some(session) = self.shift_alpha.as_mut() {
+                            session.shifted_count = 0;
+                        }
                     }
 
                     if is_shift_alpha && self.input_mode != InputMode::Alphabet {
@@ -359,6 +374,8 @@ impl InputMethodEngine {
                         self.flush_romaji_to_composed();
                         self.live.text.clear();
                         self.start_shift_alpha();
+                    } else if is_shift_alpha && let Some(session) = self.shift_alpha.as_mut() {
+                        session.shifted_count += 1;
                     }
                     let ch = if self.input_mode == InputMode::Alphabet && is_shift_alpha {
                         ch.to_ascii_uppercase()
@@ -373,22 +390,27 @@ impl InputMethodEngine {
     }
 
     /// Open a Shift+letter temporary alphabet session: switch to
-    /// [`InputMode::Alphabet`] and remember where to return.
-    /// Callers in Composing bake katakana / flush pending romaji first,
-    /// so the return mode is recorded while `input_mode` still holds the
-    /// mode the user was actually in.
+    /// [`InputMode::Alphabet`] and remember where to return. The caller
+    /// is processing the session's first shifted letter, so
+    /// `shifted_count` starts at 1. Callers in Composing bake katakana /
+    /// flush pending romaji first, so the return mode is recorded while
+    /// `input_mode` still holds the mode the user was actually in.
     fn start_shift_alpha(&mut self) {
-        self.shift_alpha = Some(self.input_mode);
+        self.shift_alpha = Some(ShiftAlpha {
+            return_mode: self.input_mode,
+            shifted_count: 1,
+        });
         self.input_mode = InputMode::Alphabet;
     }
 
     /// End a Shift+letter session at the first unshifted letter: restore
     /// the mode the session opened from, then run the letter through the
-    /// normal romaji path (`Shift+T` `o` → `Tお…`). Shifted letters are
-    /// pure literals — they never feed the romaji converter.
+    /// normal romaji path (`Shift+A` `Shift+B` `k` `a` → `ABか`).
+    /// Shifted letters are pure literals — they never feed the romaji
+    /// converter.
     fn end_shift_alpha(&mut self, ch: char) -> EngineResult {
-        if let Some(return_mode) = self.shift_alpha.take() {
-            self.input_mode = return_mode;
+        if let Some(session) = self.shift_alpha.take() {
+            self.input_mode = session.return_mode;
         }
         self.input_char(ch)
     }

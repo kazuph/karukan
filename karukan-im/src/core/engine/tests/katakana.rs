@@ -120,16 +120,21 @@ fn test_katakana_baked_on_switch_to_alphabet() {
     // The katakana text should be preserved, not reverted to hiragana
     assert_eq!(engine.input_buf.text, "アイウエオL");
 
-    // The first unshifted letter ends the session and returns to
-    // Katakana mode: 'i' converts through romaji into い (displayed
-    // as イ), then 'nu' becomes ヌ and 'x' stays pending romaji.
+    // 'L' alone stays plain alphabet input: the unshifted 'i' is a
+    // literal, not romaji.
     engine.process_key(&press('i'));
-    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLイ");
-    assert!(engine.input_mode == InputMode::Katakana);
-    engine.process_key(&press('n'));
-    engine.process_key(&press('u'));
+    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLi");
+    assert!(engine.input_mode == InputMode::Alphabet);
+
+    // Two consecutive shifted letters arm the session; the next
+    // unshifted letter ends it and returns to Katakana mode, where 'x'
+    // stays pending romaji.
+    engine.process_key(&press_shift('N'));
+    engine.process_key(&press_shift('U'));
+    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLiNU");
     engine.process_key(&press('x'));
-    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLイヌx");
+    assert_eq!(engine.preedit().unwrap().text(), "アイウエオLiNUx");
+    assert!(engine.input_mode == InputMode::Katakana);
 }
 
 #[test]
