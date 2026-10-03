@@ -207,8 +207,10 @@ fn test_alphabet_mode_pure_latin_preserves_live_text() {
     // conversion (raw latin has nothing for the model to convert).
     let mut engine = make_live_conversion_engine();
 
-    // Enter alphabet mode with pure latin "Ab".
-    engine.process_key(&press_shift('A'));
+    // Enter alphabet mode directly — persistent, unlike the Shift+letter
+    // session that ends at the first unshifted letter.
+    engine.input_mode = InputMode::Alphabet;
+    engine.process_key(&press('a'));
     engine.process_key(&press('b'));
     assert!(engine.input_mode == InputMode::Alphabet);
     assert!(!karukan_engine::contains_kana(&engine.input_buf.text));

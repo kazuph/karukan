@@ -160,6 +160,11 @@ pub struct InputMethodEngine {
     /// they were instead of dropping them in Hiragana every time. `None`
     /// whenever the current mode is not Emoji.
     pre_emoji_mode: Option<InputMode>,
+    /// Mode to return to after a Shift+letter temporary alphabet session.
+    /// `Some` iff [`InputMode::Alphabet`] was entered via Shift+letter;
+    /// `None` in every other mode, including alphabet input reached any
+    /// other way (which stays persistent).
+    shift_alpha: Option<InputMode>,
     /// Composed input buffer (hiragana text, cursor position)
     input_buf: InputBuffer,
     /// Live conversion state
@@ -202,6 +207,7 @@ impl InputMethodEngine {
             metrics: ConversionMetrics::default(),
             input_mode: InputMode::Hiragana,
             pre_emoji_mode: None,
+            shift_alpha: None,
             input_buf: InputBuffer::new(),
             live: LiveConversion::default(),
             chunks: Vec::new(),
@@ -284,6 +290,7 @@ impl InputMethodEngine {
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
         self.pre_emoji_mode = None;
+        self.shift_alpha = None;
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
@@ -300,6 +307,19 @@ impl InputMethodEngine {
     pub(super) fn exit_emoji_mode(&mut self) {
         if self.input_mode == InputMode::Emoji {
             self.input_mode = self.pre_emoji_mode.take().unwrap_or(InputMode::Hiragana);
+        }
+    }
+
+    /// Close a Shift+letter temporary alphabet session without a key:
+    /// commit, cancel, erase-to-empty and explicit mode switches all end
+    /// it here. Restores the mode the session opened from — unless the
+    /// mode already moved away from Alphabet (an explicit mode switch
+    /// always wins), in which case only the session state is dropped.
+    pub(super) fn exit_shift_alpha(&mut self) {
+        if let Some(return_mode) = self.shift_alpha.take()
+            && self.input_mode == InputMode::Alphabet
+        {
+            self.input_mode = return_mode;
         }
     }
 
@@ -323,6 +343,9 @@ impl InputMethodEngine {
             // as a literal emoji-query char (and so a Katakana-mode user
             // lands back in Katakana, not Hiragana).
             self.exit_emoji_mode();
+            // Same for a Shift+letter session: an erased buffer ends it
+            // and puts the user back in the mode they came from.
+            self.exit_shift_alpha();
             Some(
                 EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(Preedit::new()))
@@ -458,6 +481,9 @@ impl InputMethodEngine {
                 self.bake_katakana();
             }
             self.input_mode = InputMode::Hiragana;
+            // An explicit mode-toggle ends any Shift+letter session too;
+            // input_mode is already Hiragana so only the session drops.
+            self.exit_shift_alpha();
             self.flush_romaji_to_composed();
             let aux = self.format_aux_composing();
             if matches!(self.state, InputState::Composing { .. }) {
@@ -563,6 +589,7 @@ impl InputMethodEngine {
                 self.input_buf.clear();
                 self.live.text.clear();
                 self.state = InputState::Empty;
+                self.exit_shift_alpha();
                 self.surrounding_context = None;
                 text
             }
@@ -592,6 +619,7 @@ impl InputMethodEngine {
                 self.input_buf.clear();
                 self.conversion_history.clear();
                 self.state = InputState::Empty;
+                self.exit_shift_alpha();
                 self.surrounding_context = None;
                 text
             }

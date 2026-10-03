@@ -1152,26 +1152,24 @@ fn test_conversion_char_commits_and_continues_romaji() {
 fn test_alphabet_mode_space_inserts_literal_space() {
     let mut engine = InputMethodEngine::new();
 
-    // Enter alphabet mode via Shift+N
+    // Shift held through all three letters → "NEW" in alphabet mode
     engine.process_key(&press_shift('N'));
+    engine.process_key(&press_shift('E'));
+    engine.process_key(&press_shift('W'));
     assert!(engine.input_mode == InputMode::Alphabet);
-
-    // Type "ew"
-    engine.process_key(&press('e'));
-    engine.process_key(&press('w'));
-    assert_eq!(engine.preedit().unwrap().text(), "New");
+    assert_eq!(engine.preedit().unwrap().text(), "NEW");
 
     // Space → should insert literal space, NOT start conversion
     engine.process_key(&press_key(Keysym::SPACE));
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "New ");
+    assert_eq!(engine.preedit().unwrap().text(), "NEW ");
 
-    // Type "york"
-    engine.process_key(&press('y'));
-    engine.process_key(&press('o'));
-    engine.process_key(&press('r'));
+    // The next unshifted letter ends the session and resumes romaji:
+    // 'ka' converts to か (the shifted letters seed nothing).
     engine.process_key(&press('k'));
-    assert_eq!(engine.preedit().unwrap().text(), "New york");
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "NEW か");
+    assert!(engine.input_mode != InputMode::Alphabet);
 }
 
 #[test]
