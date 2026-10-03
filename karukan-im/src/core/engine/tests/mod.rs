@@ -16,6 +16,7 @@ mod live_conversion;
 mod mode_toggle;
 mod passthrough;
 mod rewriter;
+mod space_eval;
 mod strategy;
 mod surrounding;
 mod transliteration;

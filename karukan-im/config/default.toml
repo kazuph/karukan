@@ -15,15 +15,18 @@ max_context_length = 10
 # 長文入力でも1キーあたりの変換レイテンシを一定以内に抑える。
 # 各チャンクの左コンテキストは直前までのチャンクの変換結果になる。
 composing_chunk_len = 30
-# ビームサーチを使うトークン数の上限（それ以上はgreedy）
+# 旧設定。Space変換は読みの長さにかかわらず本体モデルのビーム探索を使う。
 short_input_threshold = 10
-# 短い入力のビーム幅
+# Space変換のビーム幅
 beam_width = 3
-# メインモデルの推論がこの時間(ms)を超えたらlight_modelに自動切替(0で無効)
+# 打鍵停止後のSpace先回り計算の待ち時間(ms)。0で無効。
+# 長文を含む26文×3回で、300ms待機時の最大待ち時間が24.83msとなった100msを採用。
+prefetch_delay_ms = 100
+# ライブ変換の本体推論がこの時間(ms)を超えたらlight_modelに自動切替(0で無効)
 max_latency_ms = 100
 # Model variant id or GGUF path (uses registry default if unset)
 model = "jinen-v2-small-q5"
-# Beam search model for Space conversion (uses default model only if unset)
+# Live-conversion adaptive fallback model (also used by strategy = "light")
 light_model = "jinen-v2-xsmall-q5"
 # 推論スレッド数（0 = 全コア使用）
 n_threads = 4

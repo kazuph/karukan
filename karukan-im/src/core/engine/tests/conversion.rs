@@ -169,6 +169,7 @@ fn p1_settings() -> Settings {
     settings.conversion.light_model = Some(P1_LIGHT_MODEL_ID.to_string());
     settings.conversion.n_threads = P1_N_THREADS;
     settings.conversion.live_conversion = false;
+    settings.conversion.prefetch_delay_ms = 0;
     settings.conversion.tab_skips_learning = false;
     settings.learning.enabled = true;
     settings.learning.max_entries = P1_LEARNING_MAX_ENTRIES;
@@ -265,7 +266,7 @@ fn p1_production_merge_fixture() -> (Vec<String>, Option<usize>, String) {
     assert_eq!(engine.config.num_candidates, P1_REQUEST_NUM_CANDIDATES);
     assert_eq!(
         engine.determine_strategy("ばーじょん", P1_REQUEST_NUM_CANDIDATES),
-        ConversionStrategy::ParallelBeam {
+        ConversionStrategy::MainModelBeam {
             beam_width: P1_BEAM_WIDTH
         }
     );
@@ -357,8 +358,8 @@ fn p1_initial_display_equivalence_fixture(
 ) -> (Vec<String>, Option<usize>, String) {
     let expected_texts = [
         "天気",
-        "転機",
         "てんき",
+        "転機",
         "テンキ",
         "ﾃﾝｷ",
         "☀",
@@ -402,7 +403,7 @@ fn p1_initial_display_equivalence_fixture(
     }
     assert_eq!(
         engine.determine_strategy("てんき", P1_REQUEST_NUM_CANDIDATES),
-        ConversionStrategy::ParallelBeam {
+        ConversionStrategy::MainModelBeam {
             beam_width: P1_BEAM_WIDTH
         }
     );
@@ -503,13 +504,9 @@ fn p1_target_reading(engine: &InputMethodEngine) -> String {
         .collect()
 }
 
-fn assert_p1_strategy_for_flag(engine: &InputMethodEngine, adaptive: bool) {
-    let expected = if adaptive {
-        ConversionStrategy::LightModelOnly
-    } else {
-        ConversionStrategy::ParallelBeam {
-            beam_width: P1_BEAM_WIDTH,
-        }
+fn assert_p1_strategy_for_flag(engine: &InputMethodEngine, _adaptive: bool) {
+    let expected = ConversionStrategy::MainModelBeam {
+        beam_width: P1_BEAM_WIDTH,
     };
     assert_eq!(
         engine.determine_strategy(&p1_target_reading(engine), P1_REQUEST_NUM_CANDIDATES),
@@ -520,7 +517,7 @@ fn assert_p1_strategy_for_flag(engine: &InputMethodEngine, adaptive: bool) {
 #[test]
 fn p1_initial_display_equivalence_fixture_is_repeatable() {
     eprintln!(
-        "P1 golden manifest: origin={P1_GOLDEN_ORIGIN_MAIN} main={P1_MAIN_MODEL_ID}/{P1_QUANTIZATION}@{P1_MAIN_MODEL_SHA256} light={P1_LIGHT_MODEL_ID}/{P1_QUANTIZATION}@{P1_LIGHT_MODEL_SHA256} installed_system_dict_sha256={P1_INSTALLED_SYSTEM_DICT_SHA256} fixture_system_dict_input={P1_SYSTEM_DICT_INPUT} fixture_system_dict_sha256={P1_FIXTURE_SYSTEM_DICT_SHA256} strategy=adaptive initial_space_strategy=parallel_beam num_candidates={P1_REQUEST_NUM_CANDIDATES} use_context=true max_context_length={P1_MAX_CONTEXT_LENGTH} composing_chunk_len={P1_COMPOSING_CHUNK_LENGTH} beam_width={P1_BEAM_WIDTH} short_input_threshold={P1_SHORT_INPUT_THRESHOLD} max_latency_ms={P1_MAX_LATENCY_MS} n_threads={P1_N_THREADS} live_conversion=false tab_skips_learning=false learning_enabled=true learning_max_entries={P1_LEARNING_MAX_ENTRIES} initial_adaptive=false lctx={P1_LCTX:?}"
+        "P1 golden manifest: origin={P1_GOLDEN_ORIGIN_MAIN} main={P1_MAIN_MODEL_ID}/{P1_QUANTIZATION}@{P1_MAIN_MODEL_SHA256} light={P1_LIGHT_MODEL_ID}/{P1_QUANTIZATION}@{P1_LIGHT_MODEL_SHA256} installed_system_dict_sha256={P1_INSTALLED_SYSTEM_DICT_SHA256} fixture_system_dict_input={P1_SYSTEM_DICT_INPUT} fixture_system_dict_sha256={P1_FIXTURE_SYSTEM_DICT_SHA256} strategy=adaptive initial_space_strategy=main_model_beam num_candidates={P1_REQUEST_NUM_CANDIDATES} use_context=true max_context_length={P1_MAX_CONTEXT_LENGTH} composing_chunk_len={P1_COMPOSING_CHUNK_LENGTH} beam_width={P1_BEAM_WIDTH} short_input_threshold={P1_SHORT_INPUT_THRESHOLD} max_latency_ms={P1_MAX_LATENCY_MS} n_threads={P1_N_THREADS} live_conversion=false tab_skips_learning=false learning_enabled=true learning_max_entries={P1_LEARNING_MAX_ENTRIES} initial_adaptive=false lctx={P1_LCTX:?}"
     );
     for (budget, budget_label) in p1_thread_budgets() {
         eprintln!("P1 initial fixture budget={budget_label}");
@@ -562,8 +559,8 @@ fn p1_release_candidate_matrix_matches_golden_without_conversion_cache() {
             "なにがげんいんかわかる",
             vec![
                 "なにが原因かわかる".to_string(),
-                "何が原因かわかる".to_string(),
                 "なにが原因か分かる".to_string(),
+                "何が原因かわかる".to_string(),
                 "なにがげんいんかわかる".to_string(),
                 "ナニガゲンインカワカル".to_string(),
                 "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙ".to_string(),
@@ -574,8 +571,8 @@ fn p1_release_candidate_matrix_matches_golden_without_conversion_cache() {
             "てんき",
             vec![
                 "天気".to_string(),
-                "転機".to_string(),
                 "てんき".to_string(),
+                "転機".to_string(),
                 "テンキ".to_string(),
                 "ﾃﾝｷ".to_string(),
                 "☀".to_string(),
@@ -611,15 +608,20 @@ fn p1_release_candidate_matrix_matches_golden_without_conversion_cache() {
             "てすとa1!",
             vec![
                 "テストa1!".to_string(),
+                "てストa1!".to_string(),
+                "TESTa1!".to_string(),
                 "てすとa1!".to_string(),
-                "Testa1!".to_string(),
             ],
             "テストa1!",
         ),
         (
             "なにがげんいんかわかるなにがげんいんかわかるなにがげんいんかわかるなにがげんいんかわかる",
             vec![
+                "何が原因かわかる何が原因かわかる何が原因かわかる何が原因かわかる"
+                    .to_string(),
                 "なにが原因かわかるなにが原因かわかるなにが原因かわかるなにが原因かわかる"
+                    .to_string(),
+                "何が原因か分かる何が原因か分かる何が原因か分かる何が原因か分かる"
                     .to_string(),
                 "なにがげんいんかわかるなにがげんいんかわかるなにがげんいんかわかるなにがげんいんかわかる"
                     .to_string(),
@@ -628,7 +630,7 @@ fn p1_release_candidate_matrix_matches_golden_without_conversion_cache() {
                 "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙ"
                     .to_string(),
             ],
-            "なにが原因かわかるなにが原因かわかるなにが原因かわかるなにが原因かわかる",
+            "何が原因かわかる何が原因かわかる何が原因かわかる何が原因かわかる",
         ),
     ];
     for (budget, budget_label) in p1_thread_budgets() {
@@ -659,8 +661,8 @@ fn p1_plain_arrows_preserve_non_inference_golden() {
     let reading = "なにがげんいんかわかる";
     let expected_texts = [
         "なにが原因かわかる",
-        "何が原因かわかる",
         "なにが原因か分かる",
+        "何が原因かわかる",
         "なにがげんいんかわかる",
         "ナニガゲンインカワカル",
         "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙ",
@@ -711,22 +713,12 @@ fn p1_shift_and_escape_goldens_are_strategy_specific() {
         eprintln!("P1 Shift/Esc fixture budget={budget_label}");
         let mut engine = p1_engine(budget);
         for adaptive in [false, true] {
-            let expected_left = if adaptive {
-                (
-                    vec![
-                        "なにが原因かわか",
-                        "なにがげんいんかわか",
-                        "ナニガゲンインカワカ",
-                        "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶ",
-                    ],
-                    "なにが原因かわかる",
-                )
-            } else {
+            let expected_left = {
                 (
                     vec![
                         "なにが原因かわか",
                         "何が原因かわか",
-                        "なにが原因かワカ",
+                        "ナニが原因かわか",
                         "なにがげんいんかわか",
                         "ナニガゲンインカワカ",
                         "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶ",
@@ -734,22 +726,12 @@ fn p1_shift_and_escape_goldens_are_strategy_specific() {
                     "なにが原因かわかる",
                 )
             };
-            let expected_full = if adaptive {
+            let expected_full = {
                 (
                     vec![
                         "なにが原因かわかる",
-                        "なにがげんいんかわかる",
-                        "ナニガゲンインカワカル",
-                        "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙ",
-                    ],
-                    "なにが原因かわかる",
-                )
-            } else {
-                (
-                    vec![
-                        "なにが原因かわかる",
-                        "何が原因かわかる",
                         "なにが原因か分かる",
+                        "何が原因かわかる",
                         "なにがげんいんかわかる",
                         "ナニガゲンインカワカル",
                         "ﾅﾆｶﾞｹﾞﾝｲﾝｶﾜｶﾙ",
@@ -766,12 +748,8 @@ fn p1_shift_and_escape_goldens_are_strategy_specific() {
                     .chars()
                     .take(reading.chars().count() - 1)
                     .collect::<String>();
-                let expected = if adaptive {
-                    ConversionStrategy::LightModelOnly
-                } else {
-                    ConversionStrategy::ParallelBeam {
-                        beam_width: P1_BEAM_WIDTH,
-                    }
+                let expected = ConversionStrategy::MainModelBeam {
+                    beam_width: P1_BEAM_WIDTH,
                 };
                 assert_eq!(
                     engine.determine_strategy(&shifted_left_reading, P1_REQUEST_NUM_CANDIDATES),
@@ -847,9 +825,8 @@ fn p1_adaptive_transition_preserves_flag_across_escape() {
         p1_prepare_reading(&mut engine, "なにがげんいんかわかる");
         let adaptive = engine.metrics.adaptive_use_light_model;
         assert_eq!(
-            adaptive,
-            engine.metrics.conversion_ms > P1_MAX_LATENCY_MS,
-            "adaptive transition budget={budget_label}"
+            adaptive, false,
+            "Space beam must not change the live fallback flag, budget={budget_label}"
         );
         let escaped = engine.process_key(&press_key(Keysym::ESCAPE));
         assert!(escaped.consumed, "Esc budget={budget_label}");
@@ -878,7 +855,7 @@ fn space_after_escape_reuses_nine_candidate_model_result() {
     engine.conversion_result_cache.insert(
         key,
         vec!["P1_CACHE_SENTINEL".to_string()],
-        ConversionStrategy::MainModelOnly,
+        ConversionStrategy::MainModelBeam { beam_width: 3 },
         "cached-main".to_string(),
     );
 
@@ -922,7 +899,7 @@ fn cache_hit_rebuilds_learning_candidates_in_current_priority_order() {
     engine.conversion_result_cache.insert(
         key,
         vec!["モデル候補".to_string()],
-        ConversionStrategy::MainModelOnly,
+        ConversionStrategy::MainModelBeam { beam_width: 3 },
         "cached-main".to_string(),
     );
     engine.learning = Some(LearningCache::new(100));
@@ -956,7 +933,7 @@ fn cache_hit_restores_model_name_and_preserves_adaptive_flag() {
     engine.conversion_result_cache.insert(
         key,
         vec!["愛".to_string()],
-        ConversionStrategy::MainModelOnly,
+        ConversionStrategy::MainModelBeam { beam_width: 3 },
         "cached-main".to_string(),
     );
     engine.metrics.adaptive_use_light_model = true;

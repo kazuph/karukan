@@ -169,7 +169,6 @@ fn display(candidates: &CandidateList) -> CandidateDisplay {
 
 fn strategy_name(strategy: &ConversionStrategy) -> &'static str {
     match strategy {
-        ConversionStrategy::ParallelBeam { .. } => "parallel_beam",
         ConversionStrategy::LightModelOnly => "light_model_only",
         ConversionStrategy::MainModelOnly => "main_model_only",
         ConversionStrategy::MainModelBeam { .. } => "main_model_beam",
@@ -192,7 +191,7 @@ fn prepare_thread_budget_operation(
     };
     if !matches!(
         engine.determine_strategy(READING, REQUEST_CANDIDATES),
-        ConversionStrategy::ParallelBeam { .. }
+        ConversionStrategy::MainModelBeam { .. }
     ) {
         bail!("P4 operation benchmark reading must resolve to ParallelBeam");
     }
@@ -243,7 +242,7 @@ fn measure_thread_budget_operation(
     }
 
     let operation_strategy = forced_adaptive
-        .map(|adaptive| {
+        .map(|_| {
             let target = engine
                 .input_buf
                 .text
@@ -251,12 +250,8 @@ fn measure_thread_budget_operation(
                 .take(engine.input_buf.cursor_pos)
                 .collect::<String>();
             let strategy = engine.determine_strategy(&target, REQUEST_CANDIDATES);
-            let expected = if adaptive {
-                ConversionStrategy::LightModelOnly
-            } else {
-                ConversionStrategy::ParallelBeam {
-                    beam_width: engine.config.beam_width,
-                }
+            let expected = ConversionStrategy::MainModelBeam {
+                beam_width: engine.config.beam_width,
             };
             if strategy != expected {
                 bail!("P4 operation forced strategy did not resolve as requested");
@@ -361,7 +356,7 @@ fn measure(
 
     if !matches!(
         engine.determine_strategy(READING, REQUEST_CANDIDATES),
-        ConversionStrategy::ParallelBeam { .. }
+        ConversionStrategy::MainModelBeam { .. }
     ) {
         bail!("P4 benchmark reading must resolve to ParallelBeam");
     }
