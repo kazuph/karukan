@@ -122,6 +122,20 @@ impl AnnotatedCandidate {
     }
 }
 
+/// A temporary alphabet session opened by Shift+letter. `return_mode`
+/// is the mode the session opened from — commit, cancel, erase-to-empty
+/// and explicit mode switches all restore it. `shifted_count` is the
+/// length of the current run of consecutive shifted letters; the first
+/// unshifted letter returns to kana input only when the run reached 2,
+/// and otherwise resets the run to 0. A single Shift+letter therefore
+/// keeps plain alphabet input — capitalized words like `Linux`
+/// (`Shift+L` `i` `n` `u` `x`) and camel-cased ones like `GitHub`
+/// (`Shift+G` `i` `t` `Shift+H` `u` `b`) stay Latin.
+struct ShiftAlpha {
+    return_mode: InputMode,
+    shifted_count: usize,
+}
+
 /// Resolve a model variant id from settings.
 ///
 /// - `model` is None or empty → default variant from registry
@@ -160,11 +174,11 @@ pub struct InputMethodEngine {
     /// they were instead of dropping them in Hiragana every time. `None`
     /// whenever the current mode is not Emoji.
     pre_emoji_mode: Option<InputMode>,
-    /// Mode to return to after a Shift+letter temporary alphabet session.
+    /// Shift+letter temporary alphabet session state (see [`ShiftAlpha`]).
     /// `Some` iff [`InputMode::Alphabet`] was entered via Shift+letter;
     /// `None` in every other mode, including alphabet input reached any
     /// other way (which stays persistent).
-    shift_alpha: Option<InputMode>,
+    shift_alpha: Option<ShiftAlpha>,
     /// Composed input buffer (hiragana text, cursor position)
     input_buf: InputBuffer,
     /// Live conversion state
@@ -316,10 +330,10 @@ impl InputMethodEngine {
     /// mode already moved away from Alphabet (an explicit mode switch
     /// always wins), in which case only the session state is dropped.
     pub(super) fn exit_shift_alpha(&mut self) {
-        if let Some(return_mode) = self.shift_alpha.take()
+        if let Some(session) = self.shift_alpha.take()
             && self.input_mode == InputMode::Alphabet
         {
-            self.input_mode = return_mode;
+            self.input_mode = session.return_mode;
         }
     }
 
