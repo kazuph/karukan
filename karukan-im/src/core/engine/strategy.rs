@@ -1,4 +1,11 @@
 //! Conversion strategy determination and adaptive model selection
+//!
+//! Explicit conversion (Space key) always runs a beam search on the model in
+//! the main slot — the first candidate and every lower-ranked candidate come
+//! from the same beam. The adaptive light-model switch therefore applies only
+//! to single-candidate conversion (live conversion / auto-suggest): it exists
+//! to bound per-keystroke latency, not to source Space candidates. Reading
+//! length likewise no longer selects a different Space strategy.
 
 use tracing::debug;
 
@@ -6,114 +13,66 @@ use crate::config::settings::StrategyMode;
 
 use super::*;
 
-/// Pure function to determine conversion strategy from token counts, adaptive flag,
-/// and configuration.
+/// Pure function to determine conversion strategy from the requested
+/// candidate count, adaptive flag, and configuration.
 ///
 /// This is separated from `InputMethodEngine` to enable unit testing without model instances.
 ///
 /// `adaptive_use_light_model` is set by the engine when the main model's last
 /// conversion exceeded `max_latency_ms`. It is reset when a new word begins.
 pub(super) fn determine_conversion_strategy(
-    reading_tokens: usize,
+    _reading_tokens: usize,
     num_candidates: usize,
     has_light_model: bool,
     adaptive_use_light_model: bool,
     config: &EngineConfig,
 ) -> ConversionStrategy {
+    if num_candidates > 1 {
+        // Explicit conversion (Space): beam search on the model in the main
+        // slot. In Light mode that slot holds the light model, so this is
+        // also the light-model beam path.
+        return ConversionStrategy::MainModelBeam {
+            beam_width: num_candidates.min(config.beam_width),
+        };
+    }
     match config.strategy {
-        StrategyMode::Adaptive => determine_adaptive_strategy(
-            reading_tokens,
-            num_candidates,
-            has_light_model,
-            adaptive_use_light_model,
-            config,
-        ),
-        StrategyMode::Light => {
-            // Light mode: light model is loaded into the main slot.
-            // Auto-suggest → MainModelOnly (greedy), Space → MainModelBeam (beam search)
-            if num_candidates == 1 {
-                ConversionStrategy::MainModelOnly
+        StrategyMode::Adaptive => {
+            // Single-candidate conversion adapts on measured latency.
+            if has_light_model && adaptive_use_light_model {
+                ConversionStrategy::LightModelOnly
             } else {
-                ConversionStrategy::MainModelBeam {
-                    beam_width: num_candidates.min(config.beam_width),
-                }
+                ConversionStrategy::MainModelOnly
             }
         }
-        StrategyMode::Main => {
-            // Main mode: always use main model greedy only
-            ConversionStrategy::MainModelOnly
-        }
-    }
-}
-
-/// Adaptive strategy: dynamically switch between main and light models based on latency.
-fn determine_adaptive_strategy(
-    reading_tokens: usize,
-    num_candidates: usize,
-    has_light_model: bool,
-    adaptive_use_light_model: bool,
-    config: &EngineConfig,
-) -> ConversionStrategy {
-    if !has_light_model {
-        return ConversionStrategy::MainModelOnly;
-    }
-
-    if num_candidates == 1 {
-        // Auto-suggest: adapt based on measured latency
-        if adaptive_use_light_model {
-            ConversionStrategy::LightModelOnly
-        } else {
-            ConversionStrategy::MainModelOnly
-        }
-    } else {
-        // Explicit conversion (Space key)
-        if adaptive_use_light_model {
-            // Main model was too slow — use light model only
-            ConversionStrategy::LightModelOnly
-        } else if reading_tokens <= config.short_input_threshold {
-            // Short input + main model is fast enough: parallel beam search
-            ConversionStrategy::ParallelBeam {
-                beam_width: num_candidates.min(config.beam_width),
-            }
-        } else {
-            // Long input: proactively use light model
-            ConversionStrategy::LightModelOnly
-        }
+        StrategyMode::Light | StrategyMode::Main => ConversionStrategy::MainModelOnly,
     }
 }
 
 impl InputMethodEngine {
-    /// Determine the conversion strategy based on input token counts, adaptive latency
-    /// flag, and configuration.
-    ///
-    /// Counts tokens using the main model's tokenizer and delegates to
-    /// `determine_conversion_strategy` for the actual decision logic.
+    /// Determine the conversion strategy based on the requested candidate
+    /// count and configuration. Falls back to `MainModelOnly` when the main
+    /// model is not loaded.
     pub(super) fn determine_strategy(
         &self,
         reading: &str,
         num_candidates: usize,
     ) -> ConversionStrategy {
         let has_light_model = self.converters.light_kanji.is_some();
-        let katakana = karukan_engine::hiragana_to_katakana(reading);
 
-        // Count tokens using main model's tokenizer
-        let Some(converter) = &self.converters.kanji else {
+        if self.converters.kanji.is_none() {
+            debug!("No kanji converter loaded, fallback to MainModelOnly");
             return ConversionStrategy::MainModelOnly;
-        };
-
-        let reading_tokens = match converter.count_input_tokens(&katakana) {
-            Ok(n) => n,
-            Err(e) => {
-                debug!(
-                    "Failed to count reading tokens: {}, fallback to MainModelOnly",
-                    e
-                );
-                return ConversionStrategy::MainModelOnly;
-            }
-        };
+        }
+        if num_candidates > 1 && !karukan_engine::contains_kana(reading) {
+            // Should be unreachable — run_kana_kanji_conversion skips
+            // kana-free readings before consulting the strategy — but keep
+            // the cheap guard so a direct caller cannot dispatch a beam on
+            // input the model would hallucinate over.
+            return ConversionStrategy::MainModelOnly;
+        }
 
         determine_conversion_strategy(
-            reading_tokens,
+            0,
             num_candidates,
             has_light_model,
             self.metrics.adaptive_use_light_model,
@@ -132,12 +91,14 @@ impl InputMethodEngine {
             return;
         }
         match strategy {
-            ConversionStrategy::MainModelOnly | ConversionStrategy::ParallelBeam { .. } => {
+            ConversionStrategy::MainModelOnly => {
                 self.metrics.adaptive_use_light_model =
                     self.metrics.conversion_ms > self.config.max_latency_ms;
             }
             ConversionStrategy::LightModelOnly | ConversionStrategy::MainModelBeam { .. } => {
-                // Don't update — light model latency doesn't reflect main model speed
+                // Don't update — beam latency is not representative of the
+                // single-candidate latency the flag exists to bound, and
+                // light-model latency says nothing about the main model.
             }
         }
     }

@@ -12,6 +12,7 @@ mod init;
 mod input;
 mod input_buffer;
 mod mode;
+mod prefetch;
 mod strategy;
 #[cfg(feature = "inference-thread-budget-bench")]
 pub mod thread_budget_bench;
@@ -200,7 +201,8 @@ pub struct InputMethodEngine {
     conversion_history: Vec<ConversionSegment>,
     /// Completed model results reused across explicit conversion operations.
     conversion_result_cache: ConversionResultCache,
-    /// Runtime-only thread counts for ParallelBeam's concurrent model calls.
+    space_prefetcher: Option<prefetch::SpacePrefetcher>,
+    /// Runtime-only thread-budget override used by the measurement API.
     parallel_beam_thread_budget: Option<ParallelBeamThreadBudget>,
 }
 
@@ -230,6 +232,7 @@ impl InputMethodEngine {
             composing_candidates: None,
             conversion_history: Vec::new(),
             conversion_result_cache: ConversionResultCache::default(),
+            space_prefetcher: None,
             parallel_beam_thread_budget: None,
         }
     }
@@ -255,7 +258,7 @@ impl InputMethodEngine {
         self.metrics.process_key_ms
     }
 
-    /// Set or clear the per-call thread counts used only by ParallelBeam.
+    /// Set or clear the measurement override; Space uses its main thread count.
     pub fn set_parallel_beam_thread_budget(&mut self, budget: Option<ParallelBeamThreadBudget>) {
         self.parallel_beam_thread_budget = budget;
     }
@@ -300,6 +303,7 @@ impl InputMethodEngine {
     /// the session. fcitx5 may send reset events between activate
     /// and the first keyEvent, which would wipe the context.
     pub fn reset(&mut self) {
+        self.invalidate_space_prefetch();
         self.state = InputState::Empty;
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
@@ -523,6 +527,10 @@ impl InputMethodEngine {
             );
         }
 
+        if key.is_press && !matches!(key.keysym, Keysym::SPACE | Keysym::TAB | Keysym::DOWN) {
+            self.invalidate_space_prefetch();
+        }
+
         // Right Alt/Super/Meta/Hyper: one-way non-Hiragana → Hiragana switch
         if let Some(result) = self.handle_mode_toggle_key(key) {
             return result;
@@ -579,6 +587,7 @@ impl InputMethodEngine {
             InputState::Conversion { .. } => self.process_key_conversion(key),
         };
 
+        self.schedule_space_prefetch();
         self.metrics.process_key_ms = start.elapsed().as_millis() as u64;
 
         result
@@ -586,6 +595,7 @@ impl InputMethodEngine {
 
     /// Commit any pending input and return the text
     pub fn commit(&mut self) -> String {
+        self.invalidate_space_prefetch();
         match &self.state {
             InputState::Empty => String::new(),
             InputState::Composing { .. } => {

@@ -79,9 +79,16 @@ pub struct EngineConfig {
     /// live-conversion latency stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
-    /// Token count threshold for beam search (at or below → beam, above → greedy)
+    /// Token count threshold for beam search. Retained for config
+    /// compatibility; Space conversion always runs a main-model beam now, so
+    /// the strategy no longer consults this value.
     pub short_input_threshold: usize,
-    /// Beam width for short input
+    /// Idle delay in milliseconds after the last composing keystroke before
+    /// the engine precomputes the Space conversion (main-model beam) in the
+    /// background and stores it in the conversion cache. 0 disables
+    /// prefetching.
+    pub prefetch_delay_ms: u64,
+    /// Beam width for Space conversion
     pub beam_width: usize,
     /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
     /// When a main model conversion exceeds this, the engine adaptively switches to light_model
@@ -94,8 +101,9 @@ pub struct EngineConfig {
     pub tab_skips_learning: bool,
 }
 
-/// Per-call llama.cpp thread counts for ParallelBeam's concurrent model calls.
+/// Per-call thread-budget measurement input. Space uses `main_threads`;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `light_threads` remains available for comparing the legacy budget reports.
 pub struct ParallelBeamThreadBudget {
     main_threads: u32,
     light_threads: u32,
@@ -140,6 +148,7 @@ impl EngineConfig {
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
             short_input_threshold: settings.conversion.short_input_threshold,
+            prefetch_delay_ms: settings.conversion.prefetch_delay_ms,
             beam_width: settings.conversion.beam_width,
             max_latency_ms: settings.conversion.max_latency_ms,
             strategy: settings.conversion.strategy,
@@ -157,6 +166,7 @@ impl Default for EngineConfig {
             max_api_context_len: 10,
             composing_chunk_len: 30,
             short_input_threshold: 10,
+            prefetch_delay_ms: 100,
             beam_width: 3,
             max_latency_ms: 100,
             strategy: StrategyMode::default(),
@@ -170,9 +180,11 @@ impl Default for EngineConfig {
 pub(in crate::core) struct Converters {
     /// Romaji to hiragana converter
     pub romaji: RomajiConverter,
-    /// Kanji converter (lazy loaded)
-    pub kanji: Option<KanaKanjiConverter>,
-    /// Light model for beam search
+    /// Kanji converter (lazy loaded). Shared with the Space-conversion
+    /// prefetch worker; every `convert` call builds its own llama.cpp
+    /// context, so concurrent calls are safe.
+    pub kanji: Option<std::sync::Arc<KanaKanjiConverter>>,
+    /// Light model for adaptive live conversion
     pub light_kanji: Option<KanaKanjiConverter>,
     /// Candidate rewriters (half-width katakana, symbol variants)
     pub rewriters: RewriterChain,
@@ -252,16 +264,17 @@ pub(in crate::core) struct Dictionaries {
     pub user_dict_max_mtime: Option<std::time::SystemTime>,
 }
 
-/// Conversion model dispatch strategy based on input length
+/// Conversion model dispatch strategy
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::core) enum ConversionStrategy {
-    /// Short input: main model greedy + light model beam search (parallel)
-    ParallelBeam { beam_width: usize },
-    /// Long input: light model greedy only (skip slow main model)
+    /// Light model greedy only (adaptive fallback for single-candidate
+    /// conversion when the main model exceeded `max_latency_ms`)
     LightModelOnly,
-    /// No light model: main model greedy only
+    /// Main model greedy only
     MainModelOnly,
-    /// Main model beam search (used in Light strategy mode where light model occupies main slot)
+    /// Main model beam search. Used for every explicit (Space) conversion;
+    /// in Light strategy mode the main slot holds the light model, so this
+    /// is also the light-model beam path.
     MainModelBeam { beam_width: usize },
 }
 

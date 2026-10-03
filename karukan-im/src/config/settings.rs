@@ -57,12 +57,14 @@ pub struct ConversionSettings {
     pub dict_path: Option<String>,
     /// Model variant id (optional, defaults to registry default)
     pub model: Option<String>,
-    /// Beam search model variant id (used on Space conversion, default model if unset)
+    /// Live-conversion fallback model (main slot in explicit Light mode)
     pub light_model: Option<String>,
-    /// Token count threshold for beam search (at or below → beam, above → greedy)
+    /// Legacy threshold, no longer used by Space conversion
     pub short_input_threshold: usize,
-    /// Beam width for short input
+    /// Beam width for Space conversion
     pub beam_width: usize,
+    /// Idle delay before precomputing the Space beam; 0 disables prefetch.
+    pub prefetch_delay_ms: u64,
     /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
     /// When a main model conversion exceeds this, the engine adaptively switches to light_model
     pub max_latency_ms: u64,

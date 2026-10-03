@@ -10,6 +10,7 @@ use crate::config::settings::StrategyMode;
 
 use super::*;
 
+#[cfg(test)]
 const PARALLEL_BEAM_MODEL_COUNT: u32 = 2;
 
 /// Create a KanaKanjiConverter from a variant id, optionally setting thread count.
@@ -31,6 +32,7 @@ fn threads_label(n_threads: u32) -> String {
     }
 }
 
+#[cfg(test)]
 fn adaptive_parallel_beam_thread_budget(
     n_threads: u32,
     performance_core_count: Option<u32>,
@@ -58,7 +60,7 @@ impl InputMethodEngine {
     ///
     /// Shared by the fcitx5 FFI (`karukan_engine_init`) and the stdio
     /// JSON-RPC server (`init` method). In `Adaptive` mode a light-model
-    /// failure is non-fatal (beam search is simply unavailable).
+    /// failure is non-fatal (live conversion stays on the main model).
     pub fn init_from_settings(&mut self, settings: &Settings) -> Result<()> {
         let strategy = settings.conversion.strategy;
         self.set_parallel_beam_thread_budget(None);
@@ -101,7 +103,7 @@ impl InputMethodEngine {
                     .context("failed to initialize default model")?;
                 tracing::info!("Default model loaded: {}", self.model_name());
 
-                // Initialize light model for beam search (non-fatal on failure)
+                // Initialize the live-conversion fallback (non-fatal on failure)
                 let light_variant = match resolve_variant_id(light_model.as_deref()) {
                     Ok(id) => id,
                     Err(e) => {
@@ -111,23 +113,12 @@ impl InputMethodEngine {
                 };
                 if let Err(e) = self.init_light_kanji_converter(&light_variant, n_threads) {
                     tracing::warn!(
-                        "Failed to initialize beam model (light_model={:?}): {}",
+                        "Failed to initialize live-conversion fallback model (light_model={:?}): {}",
                         light_model,
                         e
                     );
                 } else {
-                    tracing::info!("Beam model loaded");
-                    if let Some(budget) = adaptive_parallel_beam_thread_budget(
-                        n_threads,
-                        karukan_engine::performance_core_count(),
-                    ) {
-                        tracing::info!(
-                            "ParallelBeam thread budget: main={}, light={}",
-                            budget.main_threads(),
-                            budget.light_threads()
-                        );
-                        self.set_parallel_beam_thread_budget(Some(budget));
-                    }
+                    tracing::info!("Live-conversion fallback model loaded");
                 }
             }
         }
@@ -157,12 +148,12 @@ impl InputMethodEngine {
                 converter.model_display_name(),
                 threads_label(n_threads)
             );
-            self.converters.kanji = Some(converter);
+            self.converters.kanji = Some(std::sync::Arc::new(converter));
         }
         Ok(())
     }
 
-    /// Initialize the light model for beam search (generates multiple candidates on Space conversion)
+    /// Initialize the light model for adaptive single-candidate conversion
     pub fn init_light_kanji_converter(&mut self, variant_id: &str, n_threads: u32) -> Result<()> {
         if self.converters.light_kanji.is_none() {
             debug!(
@@ -422,10 +413,8 @@ mod thread_budget_tests {
     #[test]
     fn init_from_settings_applies_and_clears_adaptive_budget_with_real_models() {
         let adaptive_settings = Settings::default();
-        let expected_budget = adaptive_parallel_beam_thread_budget(
-            adaptive_settings.conversion.n_threads,
-            karukan_engine::performance_core_count(),
-        );
+        // Space uses the main model's configured threads, not a split budget.
+        let expected_budget = None;
         let mut engine =
             InputMethodEngine::with_config(EngineConfig::from_settings(&adaptive_settings));
 

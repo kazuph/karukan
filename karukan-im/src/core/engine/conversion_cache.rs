@@ -18,7 +18,12 @@ pub(super) struct CachedConversionResult {
     pub source_model_name: String,
 }
 
+#[derive(Clone)]
 pub(super) struct ConversionResultCache {
+    inner: std::sync::Arc<std::sync::Mutex<CacheEntries>>,
+}
+
+struct CacheEntries {
     capacity: usize,
     entries: VecDeque<(ConversionResultKey, CachedConversionResult)>,
 }
@@ -32,8 +37,10 @@ impl Default for ConversionResultCache {
 impl ConversionResultCache {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            capacity,
-            entries: VecDeque::with_capacity(capacity),
+            inner: std::sync::Arc::new(std::sync::Mutex::new(CacheEntries {
+                capacity,
+                entries: VecDeque::with_capacity(capacity),
+            })),
         }
     }
 
@@ -42,19 +49,20 @@ impl ConversionResultCache {
         key: &ConversionResultKey,
         current_strategy: &ConversionStrategy,
     ) -> Option<CachedConversionResult> {
-        let index = self
+        let mut cache = self.inner.lock().unwrap();
+        let index = cache
             .entries
             .iter()
             .position(|(candidate_key, _)| candidate_key == key)?;
         if !can_reuse_for_strategy(
-            &self.entries.get(index)?.1.source_strategy,
+            &cache.entries.get(index)?.1.source_strategy,
             current_strategy,
         ) {
             return None;
         }
-        let entry = self.entries.remove(index)?;
+        let entry = cache.entries.remove(index)?;
         let result = entry.1.clone();
-        self.entries.push_back(entry);
+        cache.entries.push_back(entry);
         Some(result)
     }
 
@@ -65,19 +73,20 @@ impl ConversionResultCache {
         source_strategy: ConversionStrategy,
         source_model_name: String,
     ) {
-        if self.capacity == 0 {
+        let mut cache = self.inner.lock().unwrap();
+        if cache.capacity == 0 {
             return;
         }
-        if let Some(index) = self
+        if let Some(index) = cache
             .entries
             .iter()
             .position(|(candidate_key, _)| candidate_key == &key)
         {
-            self.entries.remove(index);
-        } else if self.entries.len() == self.capacity {
-            self.entries.pop_front();
+            cache.entries.remove(index);
+        } else if cache.entries.len() == cache.capacity {
+            cache.entries.pop_front();
         }
-        self.entries.push_back((
+        cache.entries.push_back((
             key,
             CachedConversionResult {
                 candidates,
@@ -93,13 +102,6 @@ fn can_reuse_for_strategy(
     current_strategy: &ConversionStrategy,
 ) -> bool {
     source_strategy == current_strategy
-        || matches!(
-            (source_strategy, current_strategy),
-            (
-                ConversionStrategy::ParallelBeam { .. },
-                ConversionStrategy::LightModelOnly
-            )
-        )
 }
 
 #[cfg(test)]
@@ -120,13 +122,13 @@ mod tests {
         cache.insert(
             key("a"),
             vec!["A".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
         cache.insert(
             key("b"),
             vec!["B".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
 
@@ -134,7 +136,7 @@ mod tests {
             cache
                 .get(
                     &key("a"),
-                    &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                    &ConversionStrategy::MainModelBeam { beam_width: 3 },
                 )
                 .map(|result| result.candidates),
             Some(vec!["A".to_string()])
@@ -142,14 +144,14 @@ mod tests {
         cache.insert(
             key("c"),
             vec!["C".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
 
         assert_eq!(
             cache.get(
                 &key("b"),
-                &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                &ConversionStrategy::MainModelBeam { beam_width: 3 },
             ),
             None
         );
@@ -157,7 +159,7 @@ mod tests {
             cache
                 .get(
                     &key("a"),
-                    &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                    &ConversionStrategy::MainModelBeam { beam_width: 3 },
                 )
                 .map(|result| result.candidates),
             Some(vec!["A".to_string()])
@@ -166,7 +168,7 @@ mod tests {
             cache
                 .get(
                     &key("c"),
-                    &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                    &ConversionStrategy::MainModelBeam { beam_width: 3 },
                 )
                 .map(|result| result.candidates),
             Some(vec!["C".to_string()])
@@ -179,7 +181,7 @@ mod tests {
         cache.insert(
             key("a"),
             vec!["old".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
         cache.insert(
@@ -206,19 +208,22 @@ mod tests {
         cache.insert(
             key.clone(),
             vec!["愛".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
 
-        assert_eq!(cache.capacity, CONVERSION_RESULT_CACHE_CAPACITY);
-        assert_eq!(cache.capacity, 128);
+        assert_eq!(
+            cache.inner.lock().unwrap().capacity,
+            CONVERSION_RESULT_CACHE_CAPACITY
+        );
+        assert_eq!(cache.inner.lock().unwrap().capacity, 128);
         assert_eq!(
             cache.get(
                 &ConversionResultKey {
                     reading: "あお".to_string(),
                     ..key.clone()
                 },
-                &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                &ConversionStrategy::MainModelBeam { beam_width: 3 },
             ),
             None
         );
@@ -228,7 +233,7 @@ mod tests {
                     left_context: "前文".to_string(),
                     ..key.clone()
                 },
-                &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                &ConversionStrategy::MainModelBeam { beam_width: 3 },
             ),
             None
         );
@@ -238,33 +243,33 @@ mod tests {
                     num_candidates: 8,
                     ..key.clone()
                 },
-                &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                &ConversionStrategy::MainModelBeam { beam_width: 3 },
             ),
             None
         );
         assert_eq!(
-            cache.get(&key, &ConversionStrategy::ParallelBeam { beam_width: 3 },),
+            cache.get(&key, &ConversionStrategy::MainModelBeam { beam_width: 3 },),
             Some(CachedConversionResult {
                 candidates: vec!["愛".to_string()],
-                source_strategy: ConversionStrategy::ParallelBeam { beam_width: 3 },
+                source_strategy: ConversionStrategy::MainModelBeam { beam_width: 3 },
                 source_model_name: "main+light".to_string(),
             })
         );
     }
 
     #[test]
-    fn parallel_result_can_serve_light_but_light_cannot_serve_parallel() {
+    fn beam_and_live_results_are_not_interchangeable() {
         let mut cache = ConversionResultCache::with_capacity(2);
         cache.insert(
             key("a"),
             vec!["A".to_string()],
-            ConversionStrategy::ParallelBeam { beam_width: 3 },
+            ConversionStrategy::MainModelBeam { beam_width: 3 },
             "main+light".to_string(),
         );
         assert!(
             cache
                 .get(&key("a"), &ConversionStrategy::LightModelOnly)
-                .is_some()
+                .is_none()
         );
 
         cache.insert(
@@ -277,7 +282,7 @@ mod tests {
             cache
                 .get(
                     &key("b"),
-                    &ConversionStrategy::ParallelBeam { beam_width: 3 },
+                    &ConversionStrategy::MainModelBeam { beam_width: 3 },
                 )
                 .is_none()
         );

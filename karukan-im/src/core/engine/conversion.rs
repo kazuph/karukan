@@ -112,12 +112,28 @@ impl InputMethodEngine {
         api_context: &str,
         num_candidates: usize,
     ) -> Vec<String> {
+        self.run_model_conversion(reading, api_context, num_candidates, num_candidates > 1)
+    }
+
+    fn run_model_conversion(
+        &mut self,
+        reading: &str,
+        api_context: &str,
+        num_candidates: usize,
+        explicit: bool,
+    ) -> Vec<String> {
         if !karukan_engine::contains_kana(reading) {
             return vec![];
         }
         let katakana = karukan_engine::hiragana_to_katakana(reading);
 
-        let strategy = self.determine_strategy(reading, num_candidates);
+        let strategy = if explicit {
+            ConversionStrategy::MainModelBeam {
+                beam_width: num_candidates.min(self.config.beam_width),
+            }
+        } else {
+            self.determine_strategy(reading, num_candidates)
+        };
         debug!(
             "convert: reading=\"{}\" api_context=\"{}\" candidates={} strategy={:?}",
             reading, api_context, num_candidates, strategy
@@ -128,7 +144,7 @@ impl InputMethodEngine {
             left_context: api_context.to_string(),
             num_candidates,
         };
-        if num_candidates > 1
+        if explicit
             && let Some(cached_result) = self.conversion_result_cache.get(&result_key, &strategy)
         {
             debug!(
@@ -142,6 +158,16 @@ impl InputMethodEngine {
             return cached_result.candidates;
         }
 
+        if explicit && let Some(worker) = &self.space_prefetcher {
+            let started = Instant::now();
+            worker.wait_for(&result_key);
+            if let Some(cached) = self.conversion_result_cache.get(&result_key, &strategy) {
+                self.metrics.conversion_ms = started.elapsed().as_millis() as u64;
+                self.metrics.model_name = cached.source_model_name;
+                return cached.candidates;
+            }
+        }
+
         let Some(converter) = self.converters.kanji.as_ref() else {
             return vec![];
         };
@@ -149,65 +175,6 @@ impl InputMethodEngine {
         let start = Instant::now();
 
         let (candidates, completed) = match &strategy {
-            ConversionStrategy::ParallelBeam { beam_width } => {
-                let Some(light_converter) = self.converters.light_kanji.as_ref() else {
-                    return vec![];
-                };
-                let bw = *beam_width;
-                let thread_budget = self.parallel_beam_thread_budget;
-                let (default_top1, light_candidates) = std::thread::scope(|s| {
-                    let h_default = s.spawn(|| {
-                        let started = Instant::now();
-                        let result = match thread_budget {
-                            Some(budget) => converter.convert_with_n_threads_and_timing(
-                                &katakana,
-                                api_context,
-                                1,
-                                budget.main_threads(),
-                            ),
-                            None => converter
-                                .convert(&katakana, api_context, 1)
-                                .map(|candidates| (candidates, Default::default())),
-                        };
-                        (result, started.elapsed().as_millis() as u64)
-                    });
-                    let h_beam = s.spawn(|| {
-                        let started = Instant::now();
-                        let result = match thread_budget {
-                            Some(budget) => light_converter.convert_with_n_threads_and_timing(
-                                &katakana,
-                                api_context,
-                                bw,
-                                budget.light_threads(),
-                            ),
-                            None => light_converter
-                                .convert(&katakana, api_context, bw)
-                                .map(|candidates| (candidates, Default::default())),
-                        };
-                        (result, started.elapsed().as_millis() as u64)
-                    });
-                    (h_default.join(), h_beam.join())
-                });
-                let (default_top1, main_ms, main_timing, main_completed) = match default_top1 {
-                    Ok((Ok((candidates, timing)), wall_ms)) => (candidates, wall_ms, timing, true),
-                    _ => (Vec::new(), 0, Default::default(), false),
-                };
-                let (light_candidates, light_ms, light_timing, light_completed) =
-                    match light_candidates {
-                        Ok((Ok((candidates, timing)), wall_ms)) => {
-                            (candidates, wall_ms, timing, true)
-                        }
-                        _ => (Vec::new(), 0, Default::default(), false),
-                    };
-                self.metrics.main_inference_ms = main_ms;
-                self.metrics.light_inference_ms = light_ms;
-                self.metrics.prefill_ms = main_timing.prefill_ms.max(light_timing.prefill_ms);
-                self.metrics.decode_ms = main_timing.decode_ms.max(light_timing.decode_ms);
-                (
-                    Self::merge_candidates_dedup(default_top1, light_candidates, bw),
-                    main_completed && light_completed,
-                )
-            }
             ConversionStrategy::LightModelOnly => {
                 let Some(light_converter) = self.converters.light_kanji.as_ref() else {
                     return vec![];
@@ -224,8 +191,25 @@ impl InputMethodEngine {
                 }
             }
             ConversionStrategy::MainModelBeam { beam_width } => {
-                match converter.convert(&katakana, api_context, *beam_width) {
-                    Ok(candidates) => (candidates, true),
+                let started = Instant::now();
+                let result = match self.parallel_beam_thread_budget {
+                    Some(budget) => converter.convert_with_n_threads_and_timing(
+                        &katakana,
+                        api_context,
+                        *beam_width,
+                        budget.main_threads(),
+                    ),
+                    None => converter
+                        .convert(&katakana, api_context, *beam_width)
+                        .map(|candidates| (candidates, Default::default())),
+                };
+                self.metrics.main_inference_ms = started.elapsed().as_millis() as u64;
+                match result {
+                    Ok((candidates, timing)) => {
+                        self.metrics.prefill_ms = timing.prefill_ms;
+                        self.metrics.decode_ms = timing.decode_ms;
+                        (candidates, true)
+                    }
                     Err(_) => (Vec::new(), false),
                 }
             }
@@ -235,15 +219,6 @@ impl InputMethodEngine {
         self.update_adaptive_model_flag(&strategy);
 
         let source_model_name = match &strategy {
-            ConversionStrategy::ParallelBeam { .. } => {
-                let light_name = self
-                    .converters
-                    .light_kanji
-                    .as_ref()
-                    .map(|c| c.model_display_name().to_string())
-                    .unwrap_or_default();
-                format!("{}+{}", main_model_name, light_name)
-            }
             ConversionStrategy::LightModelOnly => self
                 .converters
                 .light_kanji
@@ -256,7 +231,7 @@ impl InputMethodEngine {
         };
         self.metrics.model_name = source_model_name.clone();
 
-        if num_candidates > 1 && completed {
+        if explicit && completed {
             self.conversion_result_cache.insert(
                 result_key,
                 candidates.clone(),
@@ -537,7 +512,7 @@ impl InputMethodEngine {
         }
 
         let api_context = self.truncate_context_for_api();
-        let candidates = self.run_kana_kanji_conversion(reading, &api_context, num_candidates);
+        let candidates = self.run_model_conversion(reading, &api_context, num_candidates, true);
 
         let hiragana = reading.to_string();
         let katakana = karukan_engine::hiragana_to_katakana(reading);
@@ -870,22 +845,6 @@ impl InputMethodEngine {
                 source_label: Some(source_label.clone()),
                 description,
             })
-            .collect()
-    }
-
-    /// Merge two candidate lists with deduplication
-    /// Primary candidates come first, then secondary candidates that aren't duplicates
-    pub(super) fn merge_candidates_dedup(
-        primary: Vec<String>,
-        secondary: Vec<String>,
-        max_candidates: usize,
-    ) -> Vec<String> {
-        let mut seen = HashSet::new();
-        primary
-            .into_iter()
-            .chain(secondary)
-            .filter(|c| seen.insert(c.clone()))
-            .take(max_candidates)
             .collect()
     }
 
