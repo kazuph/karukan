@@ -51,8 +51,133 @@ pub struct LookupResult<'a> {
 
 /// A double-array trie dictionary for kana-kanji conversion.
 pub struct Dictionary {
+    // Unlock before the backing allocations are freed (fields drop in declaration order).
+    memory_lock: DictionaryMemoryLock,
     trie: DoubleArray<Vec<u8>>,
     entries: Vec<DictEntry>,
+}
+
+#[derive(Default)]
+struct DictionaryMemoryLock {
+    regions: Vec<(usize, usize)>,
+}
+
+impl DictionaryMemoryLock {
+    #[cfg(unix)]
+    fn lock(trie: &[u8], entries: &[DictEntry]) -> Self {
+        // SAFETY: sysconf takes no pointers and _SC_PAGESIZE is supported on Unix.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let mut regions = Vec::new();
+        let mut add = |address: usize, bytes: usize| {
+            if bytes != 0 {
+                let start = address / page_size * page_size;
+                let end = (address + bytes).div_ceil(page_size) * page_size;
+                regions.push((start, end));
+            }
+        };
+        add(trie.as_ptr() as usize, std::mem::size_of_val(trie));
+        add(entries.as_ptr() as usize, std::mem::size_of_val(entries));
+        for entry in entries {
+            add(entry.reading.as_ptr() as usize, entry.reading.capacity());
+            add(
+                entry.candidates.as_ptr() as usize,
+                entry.candidates.capacity() * std::mem::size_of::<Candidate>(),
+            );
+            for candidate in &entry.candidates {
+                add(
+                    candidate.surface.as_ptr() as usize,
+                    candidate.surface.capacity(),
+                );
+            }
+        }
+        // Small strings often share allocator pages. Merge those pages before locking
+        // so each page is locked/unlocked once, without millions of syscalls at startup.
+        regions.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in regions {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+                continue;
+            }
+            merged.push((start, end));
+        }
+        let mut page_owners = locked_dictionary_pages().lock().unwrap();
+        let mut locked = Self::default();
+        let mut locked_bytes = 0;
+        let mut failed_bytes = 0;
+        let mut first_error = None;
+        for (start, end) in merged {
+            let bytes = end - start;
+            // SAFETY: the dictionary owns every allocation covered by these pages;
+            // none is mutated or freed while this guard is alive. mlock rounds to pages.
+            if unsafe { libc::mlock(start as *const libc::c_void, bytes) } == 0 {
+                locked.regions.push((start, bytes));
+                for page in (start..end).step_by(page_size) {
+                    *page_owners.entry(page).or_default() += 1;
+                }
+                locked_bytes += bytes;
+            } else {
+                failed_bytes += bytes;
+                first_error.get_or_insert_with(std::io::Error::last_os_error);
+            }
+        }
+        tracing::info!(locked_bytes, "Dictionary memory locked");
+        if let Some(error) = first_error {
+            tracing::warn!(failed_bytes, %error, "Dictionary memory lock failed; continuing");
+        }
+        locked
+    }
+
+    #[cfg(not(unix))]
+    fn lock(_trie: &[u8], _entries: &[DictEntry]) -> Self {
+        tracing::warn!("Dictionary memory locking is unsupported on this platform");
+        Self::default()
+    }
+}
+
+// Different dictionaries can share allocator pages. mlock/munlock do not count
+// overlapping owners, so only the last dictionary owning a page may unlock it.
+#[cfg(unix)]
+fn locked_dictionary_pages() -> &'static std::sync::Mutex<std::collections::BTreeMap<usize, usize>>
+{
+    static PAGES: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeMap<usize, usize>>> =
+        std::sync::OnceLock::new();
+    PAGES.get_or_init(Default::default)
+}
+
+impl Drop for DictionaryMemoryLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            // SAFETY: _SC_PAGESIZE is supported on Unix.
+            let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+            let mut page_owners = locked_dictionary_pages().lock().unwrap();
+            let mut unlock: Vec<(usize, usize)> = Vec::new();
+            for &(address, bytes) in &self.regions {
+                for page in (address..address + bytes).step_by(page_size) {
+                    let owners = page_owners.get_mut(&page).unwrap();
+                    *owners -= 1;
+                    if *owners == 0 {
+                        page_owners.remove(&page);
+                        if let Some(last) = unlock.last_mut()
+                            && last.0 + last.1 == page
+                        {
+                            last.1 += page_size;
+                        } else {
+                            unlock.push((page, page_size));
+                        }
+                    }
+                }
+            }
+            for (address, bytes) in unlock {
+                // SAFETY: Dictionary drops this guard before its backing allocations,
+                // and the registry confirms no other dictionary still owns these pages.
+                unsafe { libc::munlock(address as *const libc::c_void, bytes) };
+            }
+        }
+    }
 }
 
 // JSON deserialization types
@@ -84,6 +209,7 @@ impl Dictionary {
             .ok_or_else(|| DictError::Format("failed to build double-array trie".to_string()))?;
 
         Ok(Dictionary {
+            memory_lock: DictionaryMemoryLock::default(),
             trie: DoubleArray::new(trie_bytes),
             entries,
         })
@@ -259,7 +385,9 @@ impl Dictionary {
             });
         }
 
+        let memory_lock = DictionaryMemoryLock::lock(&trie_bytes, &entries);
         Ok(Dictionary {
+            memory_lock,
             trie: DoubleArray::new(trie_bytes),
             entries,
         })
@@ -462,6 +590,8 @@ impl Dictionary {
         let mut reading_order: Vec<String> = Vec::new();
 
         for dict in dicts {
+            // A merge replaces these allocations; the resulting user dictionary is rebuilt.
+            drop(dict.memory_lock);
             for entry in dict.entries {
                 if !merged.contains_key(&entry.reading) {
                     reading_order.push(entry.reading.clone());
@@ -623,6 +753,37 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_shared_dictionary_pages_stay_locked_until_last_owner_drops() {
+        let buffer = vec![0u8; 32768];
+        let first = DictionaryMemoryLock::lock(&buffer, &[]);
+        let second = DictionaryMemoryLock::lock(&buffer, &[]);
+        assert!(
+            !first.regions.is_empty(),
+            "Real mlock must succeed for this test"
+        );
+        // Use a fully interior page, not an allocator page shared with another test.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let page = (buffer.as_ptr() as usize + buffer.len() / 2) / page_size * page_size;
+        assert_eq!(
+            locked_dictionary_pages().lock().unwrap().get(&page),
+            Some(&2)
+        );
+        drop(first);
+        assert_eq!(
+            locked_dictionary_pages().lock().unwrap().get(&page),
+            Some(&1)
+        );
+        drop(second);
+        assert!(
+            !locked_dictionary_pages()
+                .lock()
+                .unwrap()
+                .contains_key(&page)
+        );
+    }
 
     fn create_test_json() -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();

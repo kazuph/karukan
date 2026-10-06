@@ -121,7 +121,9 @@ impl LlamaCppModel {
         let backend = get_backend()?;
 
         // GPT-2 has Metal issues, use CPU
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(0);
+        let model_params = LlamaModelParams::default()
+            .with_n_gpu_layers(0)
+            .with_use_mlock(true);
 
         let model = LlamaModel::load_from_file(backend, path.as_ref(), &model_params)
             .map_err(|e| KanjiError::ModelLoad(e.into()))?;
@@ -146,7 +148,11 @@ impl LlamaCppModel {
 
         let backend = get_backend()?;
 
-        let mut params = pin!(LlamaModelParams::default().with_n_gpu_layers(0));
+        let mut params = pin!(
+            LlamaModelParams::default()
+                .with_n_gpu_layers(0)
+                .with_use_mlock(true)
+        );
 
         let key =
             CString::new("tokenizer.ggml.pre").map_err(|e| KanjiError::ModelLoad(e.into()))?;
@@ -176,7 +182,9 @@ impl LlamaCppModel {
     ) -> Result<Self> {
         let backend = get_backend()?;
 
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(0);
+        let model_params = LlamaModelParams::default()
+            .with_n_gpu_layers(0)
+            .with_use_mlock(true);
 
         let model = LlamaModel::load_from_file(backend, path.as_ref(), &model_params)
             .map_err(|e| KanjiError::ModelLoad(e.into()))?;

@@ -11,9 +11,9 @@ import InputMethodKit
 class KarukanInputController: IMKInputController {
     static let candidateWindow = CandidateWindowController()
 
-    /// Mirrors whether the engine currently shows a preedit (updated from
-    /// engine actions). Used to decide when to refresh surrounding text.
-    private var hasPreedit = false
+    private var displayedPreedit = DisplayedPreedit()
+    private var hasPreedit: Bool { !displayedPreedit.text.isEmpty }
+    private lazy var inputSession = EngineInputSession(engine: engineClient)
 
     /// Diagnostics for the "IME stays selected but no keys arrive"
     /// failure: when macOS last activated this client session, and how
@@ -33,25 +33,25 @@ class KarukanInputController: IMKInputController {
         keyCount += 1
         guard let client = sender as? (any IMKTextInput) else { return false }
 
+        let deadline = EngineClient.synchronousDeadline()
+
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // Never swallow Command shortcuts.
         if flags.contains(.command) { return false }
 
-        // JIS かな key (and Karabiner right-Command tap → かな): always
-        // consume so the system doesn't process keyCode 104 after the engine
-        // returns not_consumed (already in hiragana mode).
+        // Consume a successful かな switch even when already in hiragana mode.
+        // A lost response follows the same visible-text recovery as other keys.
         if event.keyCode == KeyCodeMap.kanaKeyCode {
-            let key = EngineKeyEvent(keysym: KeyCodeMap.superRKeysym, modifiers: KeyModifiers())
-            if let result = engineClient.processKeySync(key) {
-                apply(actions: result.actions, client: client)
-            }
-            return true
+            return inputSession.handleKanaSwitch(
+                deadline: deadline,
+                apply: { self.apply(actions: $0, client: client) },
+                recover: { self.resyncAfterLostResponse(client: client) })
         }
 
         // JIS 英数 key: flush pending composition so preedit doesn't linger
         // after macOS switches to the English input source.
         if event.keyCode == KeyCodeMap.eisuKeyCode {
-            flushComposition(client: client)
+            flushComposition(client: client, deadline: deadline)
             return false
         }
 
@@ -64,41 +64,34 @@ class KarukanInputController: IMKInputController {
         // (0xff00 range): they can't start a composition, and the three
         // synchronous client IPCs in sendSurroundingText would otherwise
         // fire on every arrow-key repeat.
-        if !hasPreedit && key.keysym < 0xff00 {
+        if !hasPreedit && !inputSession.isProcessingAsync && key.keysym < 0xff00 {
             sendSurroundingText(client: client)
         }
 
-        guard let result = engineClient.processKeySync(key) else {
-            // Engine busy or dead: let the key pass through rather than
-            // freezing input — but the engine may still be about to finish
-            // this key, so put both sides back in a known state first.
-            resyncAfterLostResponse(client: client)
-            return false
-        }
-        apply(actions: result.actions, client: client)
-        return result.consumed
+        return inputSession.handle(
+            key, deadline: deadline, hasPreedit: { self.hasPreedit },
+            apply: { self.apply(actions: $0, client: client) },
+            recover: { self.resyncAfterLostResponse(client: client) })
     }
 
-    /// Recover from a `process_key` we stopped waiting for.
-    ///
-    /// The request is still queued in the engine: it will finish the key and
-    /// advance its state (Composing → Conversion, say) while we render none of
-    /// the actions it emitted, because the pending entry is gone by the time
-    /// the response arrives. Left alone the two sides stay disagreeing for the
-    /// rest of the session — the panel shows nothing while the engine believes
-    /// it is mid-conversion, so every later key is interpreted against a state
-    /// the user can't see. That is the "IME stops responding" failure, and it
-    /// does not heal on its own.
-    ///
-    /// So drop everything to Empty on both sides. The in-flight composition is
-    /// lost either way (its actions were never rendered); this at least leaves
-    /// the IME usable for the next word.
-    private func resyncAfterLostResponse(client: any IMKTextInput) {
-        NSLog("KarukanIME: lost engine response, resetting to resync")
-        engineClient.resetAsync()
-        hasPreedit = false
-        setMarkedText(text: "", caret: 0, attributes: [], client: client)
+    /// Commit the last rendered text before resetting the engine. A late response
+    /// is discarded by the transport; reset is queued after that in-flight request.
+    @discardableResult
+    private func resyncAfterLostResponse(client: any IMKTextInput) -> Bool {
+        NSLog("KarukanIME: lost engine response, preserving visible preedit and resetting")
+        let consumed = displayedPreedit.recover(
+            insertText: {
+                client.insertText($0, replacementRange: NSRange(location: NSNotFound, length: 0))
+            },
+            clearMarkedText: {
+                client.setMarkedText(
+                    NSAttributedString(string: ""),
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0))
+            })
         Self.candidateWindow.hide()
+        engineClient.resetAsync()
+        return consumed
     }
 
     // MARK: - Lifecycle
@@ -124,6 +117,7 @@ class KarukanInputController: IMKInputController {
         if let client = sender as? (any IMKTextInput) {
             flushComposition(client: client)
         } else {
+            inputSession.flushPendingComposition()
             Self.candidateWindow.hide()
         }
         engineClient.saveLearningAsync()
@@ -134,19 +128,20 @@ class KarukanInputController: IMKInputController {
         if let client = sender as? (any IMKTextInput) {
             flushComposition(client: client)
         } else {
+            inputSession.flushPendingComposition()
             Self.candidateWindow.hide()
         }
     }
 
     /// Commit any pending composition via the engine and apply the cleanup
     /// actions it emits (clear preedit, hide candidates/aux).
-    private func flushComposition(client: any IMKTextInput) {
-        if let result = engineClient.commitSync() {
-            apply(actions: result.actions, client: client)
-        } else {
-            // Engine unavailable: still drop any stale candidate panel.
-            Self.candidateWindow.hide()
-        }
+    private func flushComposition(
+        client: any IMKTextInput, deadline: DispatchTime = EngineClient.synchronousDeadline()
+    ) {
+        inputSession.flush(
+            deadline: deadline, hasPreedit: { self.hasPreedit },
+            apply: { self.apply(actions: $0, client: client) },
+            recover: { self.resyncAfterLostResponse(client: client) })
     }
 
     // MARK: - Applying engine actions
@@ -176,10 +171,10 @@ class KarukanInputController: IMKInputController {
         for action in actions {
             switch action {
             case .commit(let text):
+                displayedPreedit.text = ""
                 client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
 
             case .updatePreedit(let text, let caret, let attributes):
-                hasPreedit = !text.isEmpty
                 setMarkedText(text: text, caret: caret, attributes: attributes, client: client)
 
             case .showCandidates(let candidates, let cursor, let page, let totalPages):
@@ -260,6 +255,7 @@ class KarukanInputController: IMKInputController {
     private func setMarkedText(
         text: String, caret: Int, attributes: [PreeditAttr], client: any IMKTextInput
     ) {
+        displayedPreedit.text = text
         guard !text.isEmpty else {
             client.setMarkedText(
                 NSAttributedString(string: ""),
@@ -297,10 +293,10 @@ class KarukanInputController: IMKInputController {
     }
 
     private func selectCandidateFromWindow(pageIndex: Int, client: any IMKTextInput) {
-        guard let result = engineClient.selectCandidateSync(pageIndex: pageIndex) else {
-            return
-        }
-        apply(actions: result.actions, client: client)
+        inputSession.selectCandidate(
+            pageIndex: pageIndex, hasPreedit: { self.hasPreedit },
+            apply: { self.apply(actions: $0, client: client) },
+            recover: { self.resyncAfterLostResponse(client: client) })
     }
 }
 
@@ -322,4 +318,216 @@ func utf16Range(of scalarRange: Range<Int>, in text: String) -> NSRange? {
     let start = utf16Offset(ofScalarOffset: scalarRange.lowerBound, in: text)
     let end = utf16Offset(ofScalarOffset: scalarRange.upperBound, in: text)
     return NSRange(location: start, length: end - start)
+}
+
+/// The text actually shown to the client, independent of an in-flight engine request.
+struct DisplayedPreedit {
+    var text = ""
+
+    @discardableResult
+    mutating func recover(insertText: (String) -> Void, clearMarkedText: () -> Void) -> Bool {
+        let visibleText = text
+        text = ""
+        if !visibleText.isEmpty { insertText(visibleText) }
+        clearMarkedText()
+        return !visibleText.isEmpty
+    }
+}
+
+/// Key dispatch shared by the IMK adapter and real-engine integration tests.
+final class EngineInputSession {
+    private let engine: EngineClient
+    private var pendingInput: PendingInput?
+    private var queuedKeys: [QueuedKey] = []
+    private var isApplyingInput = false
+
+    var isProcessingAsync: Bool { pendingInput != nil || !queuedKeys.isEmpty || isApplyingInput }
+
+    init(engine: EngineClient) { self.engine = engine }
+
+    func handleKanaSwitch(
+        deadline: DispatchTime = EngineClient.synchronousDeadline(),
+        apply: @escaping ([EngineAction]) -> Void, recover: @escaping () -> Bool
+    ) -> Bool {
+        let key = EngineKeyEvent(keysym: KeyCodeMap.superRKeysym, modifiers: KeyModifiers())
+        if isProcessingAsync {
+            queuedKeys.append(QueuedKey(key: key, apply: apply, recover: recover))
+            return true
+        }
+        // Always consume: the system must never see keyCode 104 (existing contract).
+        guard let result = engine.processKeySync(key, deadline: deadline) else {
+            _ = recover()
+            return true
+        }
+        apply(result.actions)
+        return true
+    }
+
+    func handle(
+        _ key: EngineKeyEvent, deadline: DispatchTime = EngineClient.synchronousDeadline(),
+        hasPreedit: () -> Bool,
+        apply: @escaping ([EngineAction]) -> Void, recover: @escaping () -> Bool
+    ) -> Bool {
+        if key.modifiers.superKey { return false }
+        let input = QueuedKey(key: key, apply: apply, recover: recover)
+        if isProcessingAsync {
+            queuedKeys.append(input)
+            return true
+        }
+        if hasPreedit() && (key.keysym == 0xff0d || key.keysym == 0xff8d) {
+            start(input, preserveKeyOnLoss: false)
+            return true
+        }
+        guard let result = engine.processKeySync(key, deadline: deadline) else { return recover() }
+        apply(result.actions)
+        return result.consumed
+    }
+
+    /// Lifecycle barriers may wait for the entire queue, but share one two-second
+    /// budget. If it expires, preserve undelivered printable keys on their original client.
+    @discardableResult
+    func finishPending(until deadline: DispatchTime) -> Bool {
+        let hadPending = isProcessingAsync
+        while let pending = pendingInput {
+            pending.wait(until: min(deadline, pending.deadline))
+            if pending.isReady {
+                finish(pending)
+            } else {
+                preserveAndDiscardQueue(pending)
+                break
+            }
+        }
+        return hadPending
+    }
+
+    func flush(
+        deadline: DispatchTime = EngineClient.synchronousDeadline(), hasPreedit: () -> Bool,
+        apply: ([EngineAction]) -> Void, recover: () -> Bool
+    ) {
+        if finishPending(until: deadline) && !hasPreedit() { return }
+        if let result = engine.commitSync(deadline: deadline) { apply(result.actions) } else { _ = recover() }
+    }
+
+    func flushPendingComposition() {
+        guard let input = pendingInput?.input else { return }
+        let deadline = EngineClient.synchronousDeadline()
+        finishPending(until: deadline)
+        if let result = engine.commitSync(deadline: deadline) {
+            input.apply(result.actions)
+        } else {
+            _ = input.recover()
+        }
+    }
+
+    func selectCandidate(
+        pageIndex: Int, hasPreedit: () -> Bool,
+        apply: ([EngineAction]) -> Void, recover: () -> Bool
+    ) {
+        let deadline = EngineClient.synchronousDeadline()
+        if finishPending(until: deadline) && !hasPreedit() { return }
+        if let result = engine.selectCandidateSync(pageIndex: pageIndex, deadline: deadline) {
+            apply(result.actions)
+        } else {
+            _ = recover()
+        }
+    }
+
+    private func start(_ input: QueuedKey, preserveKeyOnLoss: Bool) {
+        let pending = PendingInput(input: input, preserveKeyOnLoss: preserveKeyOnLoss)
+        pendingInput = pending
+        pending.requestID = engine.processKeyAsync(input.key) { [weak self] result in
+            pending.resolve(result)
+            DispatchQueue.main.async { self?.finish(pending) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: pending.deadline) { [weak self, weak pending] in
+            guard let pending else { return }
+            self?.finish(pending)
+        }
+    }
+
+    private func finish(_ pending: PendingInput) {
+        // Claim once on main; late replies and timers cannot apply to newer input.
+        guard pendingInput === pending else { return }
+        pendingInput = nil
+        if let id = pending.requestID { engine.abandonRequest(id) }
+        isApplyingInput = true
+        if let result = pending.result {
+            pending.input.apply(result.actions)
+            if !result.consumed { pending.input.preservePrintableKey() }
+        } else {
+            _ = pending.input.recover()
+            if pending.preserveKeyOnLoss { pending.input.preservePrintableKey() }
+        }
+        isApplyingInput = false
+        if !queuedKeys.isEmpty { start(queuedKeys.removeFirst(), preserveKeyOnLoss: true) }
+    }
+
+    private func preserveAndDiscardQueue(_ pending: PendingInput) {
+        guard pendingInput === pending else { return }
+        let remaining = queuedKeys
+        queuedKeys.removeAll()
+        pendingInput = nil
+        if let id = pending.requestID { engine.abandonRequest(id) }
+        _ = pending.input.recover()
+        if pending.preserveKeyOnLoss { pending.input.preservePrintableKey() }
+        for input in remaining { input.preservePrintableKey() }
+    }
+
+    private struct QueuedKey {
+        let key: EngineKeyEvent
+        let apply: ([EngineAction]) -> Void
+        let recover: () -> Bool
+
+        func preservePrintableKey() {
+            // The translated printable domain is ASCII plus the JIS yen key.
+            guard (0x20...0x7e).contains(key.keysym) || key.keysym == 0x00a5,
+                !key.modifiers.control, !key.modifiers.superKey,
+                let scalar = UnicodeScalar(key.keysym)
+            else { return }
+            apply([.commit(text: String(scalar))])
+        }
+    }
+
+    private final class PendingInput {
+        let deadline = DispatchTime.now() + EngineClient.enterTimeout
+        let input: QueuedKey
+        let preserveKeyOnLoss: Bool
+        var requestID: Int?
+        private let lock = NSLock()
+        private let semaphore = DispatchSemaphore(value: 0)
+        private var ready = false
+        private var value: KeyResult?
+
+        init(input: QueuedKey, preserveKeyOnLoss: Bool) {
+            self.input = input
+            self.preserveKeyOnLoss = preserveKeyOnLoss
+        }
+
+        var isReady: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return ready
+        }
+
+        func resolve(_ result: KeyResult?) {
+            lock.lock()
+            value = DispatchTime.now() <= deadline ? result : nil
+            ready = true
+            lock.unlock()
+            semaphore.signal()
+        }
+
+        var result: KeyResult? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func wait(until deadline: DispatchTime) {
+            lock.lock()
+            let alreadyReady = ready
+            lock.unlock()
+            if !alreadyReady { _ = semaphore.wait(timeout: deadline) }
+        }
+    }
 }

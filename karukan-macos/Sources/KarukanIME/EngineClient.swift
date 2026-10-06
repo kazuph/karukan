@@ -4,10 +4,20 @@ import Foundation
 ///
 /// Requests are written to the child's stdin; a dedicated reader queue
 /// splits stdout on 0x0A and dispatches responses to pending completions.
-/// Key processing uses the synchronous API (the IMK `handle` callback must
-/// answer "consumed?" synchronously, the same trade-off Mozc makes); slow
-/// or fire-and-forget calls use the async API.
+/// Visible-preedit Enter is acknowledged before its async response arrives.
+/// Other key processing uses the short synchronous deadline required by IMK.
 class EngineClient {
+    // GOAL-rev2.md: keep synchronous callbacks below the observed IMK stall.
+    static let synchronousTimeout: TimeInterval = 2.0
+    static let enterTimeout: TimeInterval = 10.0
+
+    static func synchronousDeadline() -> DispatchTime { .now() + synchronousTimeout }
+
+    static func remaining(until deadline: DispatchTime) -> TimeInterval {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return deadline.uptimeNanoseconds > now
+            ? Double(deadline.uptimeNanoseconds - now) / 1_000_000_000 : 0
+    }
     private let serverProcess: EngineProcess
     private var nextID = 1
     private let requestQueue = DispatchQueue(label: "dev.togatoga.karukan.jsonrpc.request")
@@ -45,21 +55,47 @@ class EngineClient {
         }
     }
 
-    func processKeySync(_ key: EngineKeyEvent, isRelease: Bool = false) -> KeyResult? {
+    private func keyParams(_ key: EngineKeyEvent, isRelease: Bool) -> [String: Any] {
         let params: [String: Any] = [
-            "keysym": key.keysym,
+            // The engine handles RETURN; macOS keyCode 76 translates to KP_Enter.
+            "keysym": key.keysym == 0xff8d ? UInt32(0xff0d) : key.keysym,
             "modifiers": key.modifiers.jsonObject,
             "is_release": isRelease,
         ]
-        return keyResultSync(method: "process_key", params: params, timeout: 3.0)
+        return params
     }
 
-    func commitSync() -> KeyResult? {
-        keyResultSync(method: "commit", params: [:], timeout: 1.0)
+    func processKeySync(
+        _ key: EngineKeyEvent, isRelease: Bool = false,
+        deadline: DispatchTime = EngineClient.synchronousDeadline()
+    ) -> KeyResult? {
+        keyResultSync(
+            method: "process_key", params: keyParams(key, isRelease: isRelease),
+            timeout: Self.remaining(until: deadline))
     }
 
-    func selectCandidateSync(pageIndex: Int) -> KeyResult? {
-        keyResultSync(method: "select_candidate", params: ["page_index": pageIndex], timeout: 1.0)
+    @discardableResult
+    func processKeyAsync(_ key: EngineKeyEvent, completion: @escaping (KeyResult?) -> Void) -> Int {
+        sendRequest(method: "process_key", params: keyParams(key, isRelease: false)) { data in
+            completion(Self.decodeKeyResult(data, method: "process_key"))
+        }
+    }
+
+    func abandonRequest(_ id: Int) {
+        // The engine still finishes the request; its late reply must not reach the UI.
+        _ = takePending(id: id)
+    }
+
+    func commitSync(deadline: DispatchTime = EngineClient.synchronousDeadline()) -> KeyResult? {
+        keyResultSync(method: "commit", params: [:], timeout: Self.remaining(until: deadline))
+    }
+
+    func selectCandidateSync(
+        pageIndex: Int, deadline: DispatchTime = EngineClient.synchronousDeadline()
+    ) -> KeyResult? {
+        keyResultSync(
+            method: "select_candidate", params: ["page_index": pageIndex],
+            timeout: Self.remaining(until: deadline))
     }
 
     func saveLearningAsync() {
@@ -86,9 +122,11 @@ class EngineClient {
     private func keyResultSync(method: String, params: [String: Any], timeout: TimeInterval)
         -> KeyResult?
     {
-        guard let data = sendRequestSync(method: method, params: params, timeout: timeout) else {
-            return nil
-        }
+        Self.decodeKeyResult(sendRequestSync(method: method, params: params, timeout: timeout), method: method)
+    }
+
+    private static func decodeKeyResult(_ data: Data?, method: String) -> KeyResult? {
+        guard let data else { return nil }
         do {
             return try makeProtocolDecoder().decode(KeyResult.self, from: data)
         } catch {
